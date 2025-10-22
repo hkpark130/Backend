@@ -73,10 +73,65 @@ public class DeviceService {
                 .toList();
     }
 
+    public List<DeviceDto> findAllDevicesForAdmin() {
+        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatusNot(Constants.DISPOSE_TYPE);
+        return devices.stream()
+                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
+                .toList();
+    }
+
     public DeviceDto findById(String id) {
         Devices device = devicesRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Device not found: " + id));
         return new DeviceDto(device, buildHistory(id));
+    }
+
+    @Transactional
+    public DeviceDto disposeDeviceByAdmin(String deviceId, String reason, String operatorOverride) {
+    Devices device = devicesRepository.findById(deviceId)
+        .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
+
+    String operatorUsername = commonLookupService.currentUsernameFromJwt()
+        .or(() -> Optional.ofNullable(operatorOverride).filter(s -> !s.isBlank()))
+        .orElseThrow(() -> new IllegalStateException("인증된 사용자 정보를 찾을 수 없습니다."));
+
+    Users operator = commonLookupService.findUserByUsername(operatorUsername)
+        .orElseThrow(() -> new IllegalArgumentException("User not found: " + operatorUsername));
+
+    Optional<ApprovalDevices> latestApproval = device.getApprovalDevices().stream()
+        .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
+            Comparator.nullsFirst(Comparator.naturalOrder())));
+
+    latestApproval.ifPresent(approval -> {
+        if (Constants.APPROVAL_WAITING.equals(approval.getApprovalInfo())) {
+                if (Constants.DISPOSE_TYPE.equals(approval.getType())) {
+                    approval.setApprovalInfo(Constants.APPROVAL_COMPLETED);
+                } else {
+                    approval.setApprovalInfo(Constants.APPROVAL_REJECT);
+                }
+        approvalDevicesRepository.save(approval);
+        }
+    });
+
+    device.setStatus(Constants.DISPOSE_TYPE);
+    device.setIsUsable(Boolean.FALSE);
+    device.setUserId(null);
+    device.setRealUser(null);
+    device.setUserUuid(null);
+    devicesRepository.save(device);
+
+    ApprovalDevices disposalRecord = new ApprovalDevices();
+    disposalRecord.setDeviceId(device);
+    disposalRecord.setUserId(operator);
+    disposalRecord.setType(Constants.DISPOSE_TYPE);
+    disposalRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
+    disposalRecord.setProjectId(device.getProjectId());
+    String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
+    disposalRecord.setReason(trimmedReason.isEmpty() ? "관리자 즉시 폐기 처리" : trimmedReason);
+    ApprovalDevices savedRecord = approvalDevicesRepository.save(disposalRecord);
+    device.getApprovalDevices().add(savedRecord);
+
+    return new DeviceDto(device, buildHistory(deviceId));
     }
 
     @Transactional
@@ -140,7 +195,10 @@ public class DeviceService {
         for (ApprovalDevices history : histories) {
             Map<String, Object> map = new HashMap<>();
             map.put("username", Optional.ofNullable(history.getUserId()).map(Users::getUsername).orElse("알 수 없음"));
-            map.put("type", history.getType());
+        map.put("type", history.getType());
+        map.put("projectName", Optional.ofNullable(history.getProjectId())
+            .map(project -> project.getName())
+            .orElse(null));
             map.put("modifiedDate", history.getModifiedDate());
             historyList.add(map);
         }
