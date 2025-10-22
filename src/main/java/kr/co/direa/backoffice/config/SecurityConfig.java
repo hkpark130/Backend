@@ -19,13 +19,17 @@ public class SecurityConfig {
             "/api/device/*",
             "/api/categories",
             "/api/departments",
-            "/api/projects"
+            "/api/projects",
+            "/api/devices/bulk",
+
+            "/**"
     };
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.ignoringRequestMatchers(toH2Console()))
+                // API는 stateless로 운영하므로 CSRF 비활성화
+                .csrf(csrf -> csrf.disable())
                 .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

@@ -9,6 +9,7 @@ import kr.co.direa.backoffice.repository.ApprovalDevicesRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -16,12 +17,54 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class DeviceService {
     private final DevicesRepository devicesRepository;
     private final ApprovalDevicesRepository approvalDevicesRepository;
+    private final CommonLookupService commonLookupService;
+
+    // Bulk 등록 메서드
+    @Transactional
+    public void bulkRegisterDevices(List<DeviceDto> deviceDtoList) {
+        for (DeviceDto dto : deviceDtoList) {
+            Devices device = new Devices();
+            device.setId(dto.getId());
+            // categoryName -> categoryId
+        commonLookupService.findCategoryByName(dto.getCategoryName())
+                    .ifPresent(device::setCategoryId);
+            // manageDepName -> manageDep
+        commonLookupService.findDepartmentByName(dto.getManageDepName())
+                    .ifPresent(device::setManageDep);
+            // projectName -> projectId
+        commonLookupService.findProjectByName(dto.getProjectName())
+                    .ifPresent(device::setProjectId);
+            device.setStatus(dto.getStatus());
+            device.setPurpose(dto.getPurpose());
+            device.setSpec(dto.getSpec());
+            device.setPrice(dto.getPrice());
+            device.setModel(dto.getModel());
+            device.setCompany(dto.getCompany());
+            device.setSn(dto.getSn());
+            device.setIsUsable(Boolean.valueOf(String.valueOf(dto.getIsUsable())));
+            device.setPurchaseDate(dto.getPurchaseDate());
+            device.setDescription(dto.getDescription());
+            device.setAdminDescription(dto.getAdminDescription());
+        // username -> userUuid (Keycloak)
+            commonLookupService.resolveKeycloakUserIdByUsername(dto.getUsername())
+                    .ifPresent(uuidStr -> {
+                        try {
+                            device.setUserUuid(UUID.fromString(uuidStr));
+                        } catch (IllegalArgumentException ignored) {}
+                    });
+        // (선택) 기존 Users 연관 유지가 필요하면 아래 주석 해제
+        // commonLookupService.findUserByUsername(dto.getUsername())
+        //         .ifPresent(device::setUserId);
+            devicesRepository.save(device);
+        }
+    }
     public List<DeviceDto> findAvailableDevices() {
         List<Devices> devices = devicesRepository.findAllWithApprovals();
         return devices.stream()
@@ -33,6 +76,43 @@ public class DeviceService {
     public DeviceDto findById(String id) {
         Devices device = devicesRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Device not found: " + id));
+        return new DeviceDto(device, buildHistory(id));
+    }
+
+    @Transactional
+    public DeviceDto updateDevice(String id, DeviceDto dto) {
+        Devices device = devicesRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Device not found: " + id));
+
+        var categoryOpt = commonLookupService.findCategoryByName(dto.getCategoryName());
+        var projectOpt = commonLookupService.findProjectByName(dto.getProjectName());
+        var deptOpt = commonLookupService.findDepartmentByName(dto.getManageDepName());
+
+        long price = dto.getPrice() == null ? 0L : dto.getPrice();
+        device.update(
+                categoryOpt.orElse(null),
+                projectOpt.orElse(null),
+                deptOpt.orElse(null),
+                price,
+                dto.getStatus(),
+                dto.getPurpose(),
+                dto.getDescription(),
+                dto.getAdminDescription(),
+                dto.getModel(),
+                dto.getCompany(),
+                dto.getSn(),
+                dto.getSpec(),
+                dto.getPurchaseDate()
+        );
+
+        // 사용자 정보 및 실사용자 반영
+        device.setRealUser(dto.getRealUser());
+        commonLookupService.findUserByUsername(dto.getUsername()).ifPresent(device::setUserId);
+        commonLookupService.resolveKeycloakUserIdByUsername(dto.getUsername()).ifPresent(uuidStr -> {
+            try { device.setUserUuid(java.util.UUID.fromString(uuidStr)); } catch (IllegalArgumentException ignore) {}
+        });
+
+        devicesRepository.save(device);
         return new DeviceDto(device, buildHistory(id));
     }
 

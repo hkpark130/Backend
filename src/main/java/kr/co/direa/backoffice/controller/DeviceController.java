@@ -6,6 +6,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -27,5 +30,17 @@ public class DeviceController {
     // TODO 인증 연동 시: 장비 상세 조회 역시 로그인 사용자 권한 확인 후 제공하도록 보호 필요
     public ResponseEntity<DeviceDto> getDevice(@PathVariable String id) {
         return ResponseEntity.ok(deviceService.findById(id));
+    }
+
+    @PutMapping("/device/{id}")
+    public ResponseEntity<DeviceDto> updateDevice(@PathVariable String id, @RequestBody DeviceDto dto) {
+        return ResponseEntity.ok(deviceService.updateDevice(id, dto));
+    }
+
+    // Bulk 등록 API
+    @PostMapping("/devices/bulk")
+    public ResponseEntity<?> bulkRegisterDevices(@RequestBody List<DeviceDto> deviceDtoList) {
+        deviceService.bulkRegisterDevices(deviceDtoList);
+        return ResponseEntity.ok("success");
     }
 }

@@ -9,6 +9,7 @@ import lombok.Setter;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -26,6 +27,10 @@ public class Devices extends BaseTimeEntity {
 
     @Column(name = "real_user")
     private String realUser;
+
+    // Keycloak 사용자 식별자(UUID)
+    @Column(name = "user_uuid")
+    private UUID userUuid;
 
     @OneToMany(mappedBy = "deviceId", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     private List<ApprovalDevices> approvalDevices = new ArrayList<>();
