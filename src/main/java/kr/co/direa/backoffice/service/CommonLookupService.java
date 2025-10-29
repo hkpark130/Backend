@@ -22,6 +22,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import java.util.Optional;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
@@ -117,9 +118,18 @@ public class CommonLookupService {
      * - 추후 Keycloak Admin Client/REST 연동 후 구현
      */
     public Optional<String> resolveKeycloakUserIdByUsername(String username) {
-        if (username == null || username.isBlank()) return Optional.empty();
+        return resolveKeycloakUserInfoByUsername(username)
+                .map(KeycloakUserInfo::id)
+                .map(UUID::toString);
+    }
+
+    public Optional<KeycloakUserInfo> resolveKeycloakUserInfoByUsername(String username) {
+        if (username == null || username.isBlank()) {
+            return Optional.empty();
+        }
         if (!isBlank(keycloakAdminUsername) && username.equalsIgnoreCase(keycloakAdminUsername) && !isBlank(keycloakAdminUserId)) {
-            return Optional.of(keycloakAdminUserId);
+            return parseUuid(keycloakAdminUserId)
+                    .map(adminId -> new KeycloakUserInfo(adminId, keycloakAdminUsername, null));
         }
         if (isBlank(keycloakUrl) || isBlank(keycloakRealm) || isBlank(keycloakAdminClientId)) {
             return Optional.empty();
@@ -145,19 +155,22 @@ public class CommonLookupService {
                     entity,
                     new ParameterizedTypeReference<List<Map<String,Object>>>() {}
             );
-            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null || resp.getBody().isEmpty()) {
+            List<Map<String,Object>> body = resp.getBody();
+            if (!resp.getStatusCode().is2xxSuccessful() || body == null || body.isEmpty()) {
                 return Optional.empty();
             }
 
-            Map<String,Object> first = resp.getBody().get(0);
-            Object id = first.get("id");
-            if (id != null) {
-                return Optional.of(id.toString());
+            Map<String,Object> first = body.get(0);
+            UUID externalId = parseUuid(toStringOrNull(first.get("id"))).orElse(null);
+            String resolvedUsername = toStringOrNull(first.get("username"));
+            String email = toStringOrNull(first.get("email"));
+            if (resolvedUsername == null || resolvedUsername.isBlank()) {
+                resolvedUsername = username;
             }
+            return Optional.of(new KeycloakUserInfo(externalId, resolvedUsername, email));
         } catch (Exception ignored) {
             return Optional.empty();
         }
-        return Optional.empty();
     }
 
     /**
@@ -172,11 +185,11 @@ public class CommonLookupService {
         if (isBlank(keycloakAdminGroupId)) {
             return false;
         }
-        var userId = resolveKeycloakUserIdByUsername(username).orElse(null);
-        if (isBlank(userId)) {
+        var userInfo = resolveKeycloakUserInfoByUsername(username).orElse(null);
+        if (userInfo == null || userInfo.id() == null) {
             return false;
         }
-        return isUserInGroup(userId, keycloakAdminGroupId);
+        return isUserInGroup(userInfo.id().toString(), keycloakAdminGroupId);
     }
 
     private Optional<String> getKeycloakAdminAccessToken() {
@@ -218,10 +231,11 @@ public class CommonLookupService {
                     req,
                     new ParameterizedTypeReference<Map<String,Object>>() {}
             );
-            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+            Map<String,Object> body = resp.getBody();
+            if (!resp.getStatusCode().is2xxSuccessful() || body == null) {
                 return Optional.empty();
             }
-            Object token = resp.getBody().get("access_token");
+            Object token = body.get("access_token");
             return Optional.ofNullable(token).map(Object::toString).filter(s -> !s.isBlank());
         } catch (Exception ignored) {
             return Optional.empty();
@@ -254,10 +268,11 @@ public class CommonLookupService {
                     entity,
                     new ParameterizedTypeReference<List<Map<String, Object>>>() {}
             );
-            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+            List<Map<String, Object>> body = resp.getBody();
+            if (!resp.getStatusCode().is2xxSuccessful() || body == null) {
                 return false;
             }
-            boolean matched = resp.getBody().stream()
+            boolean matched = body.stream()
                     .map(group -> group.get("id"))
                     .filter(id -> id != null)
                     .anyMatch(id -> groupId.equals(id.toString()));
@@ -270,4 +285,25 @@ public class CommonLookupService {
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
     }
+
+    private Optional<UUID> parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(UUID.fromString(value));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private String toStringOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String str = value.toString();
+        return str.isBlank() ? null : str;
+    }
+
+    public record KeycloakUserInfo(UUID id, String username, String email) {}
 }

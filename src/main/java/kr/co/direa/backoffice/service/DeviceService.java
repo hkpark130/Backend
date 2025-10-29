@@ -1,16 +1,6 @@
 package kr.co.direa.backoffice.service;
 
-import kr.co.direa.backoffice.constant.Constants;
-import kr.co.direa.backoffice.domain.ApprovalDevices;
-import kr.co.direa.backoffice.domain.Devices;
-import kr.co.direa.backoffice.domain.Users;
-import kr.co.direa.backoffice.dto.DeviceDto;
-import kr.co.direa.backoffice.repository.ApprovalDevicesRepository;
-import kr.co.direa.backoffice.repository.DevicesRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -21,11 +11,29 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import kr.co.direa.backoffice.constant.Constants;
+import kr.co.direa.backoffice.domain.ApprovalRequest;
+import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
+import kr.co.direa.backoffice.domain.Devices;
+import kr.co.direa.backoffice.domain.Projects;
+import kr.co.direa.backoffice.domain.Users;
+import kr.co.direa.backoffice.domain.enums.ApprovalCategory;
+import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
+import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
+import kr.co.direa.backoffice.dto.DeviceDto;
+import kr.co.direa.backoffice.repository.ApprovalRequestRepository;
+import kr.co.direa.backoffice.repository.DeviceApprovalDetailRepository;
+import kr.co.direa.backoffice.repository.DevicesRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 @Service
 @RequiredArgsConstructor
 public class DeviceService {
     private final DevicesRepository devicesRepository;
-    private final ApprovalDevicesRepository approvalDevicesRepository;
+    private final ApprovalRequestRepository approvalRequestRepository;
+    private final DeviceApprovalDetailRepository deviceApprovalDetailRepository;
     private final CommonLookupService commonLookupService;
 
     private static final Pattern OPERATOR_SUFFIX_PATTERN = Pattern.compile("\\(처리자: (?<username>.+?)\\)$");
@@ -37,13 +45,13 @@ public class DeviceService {
             Devices device = new Devices();
             device.setId(dto.getId());
             // categoryName -> categoryId
-        commonLookupService.findCategoryByName(dto.getCategoryName())
+            commonLookupService.findCategoryByName(dto.getCategoryName())
                     .ifPresent(device::setCategoryId);
             // manageDepName -> manageDep
-        commonLookupService.findDepartmentByName(dto.getManageDepName())
+            commonLookupService.findDepartmentByName(dto.getManageDepName())
                     .ifPresent(device::setManageDep);
             // projectName -> projectId
-        commonLookupService.findProjectByName(dto.getProjectName())
+            commonLookupService.findProjectByName(dto.getProjectName())
                     .ifPresent(device::setProjectId);
             device.setStatus(dto.getStatus());
             device.setPurpose(dto.getPurpose());
@@ -56,19 +64,20 @@ public class DeviceService {
             device.setPurchaseDate(dto.getPurchaseDate());
             device.setDescription(dto.getDescription());
             device.setAdminDescription(dto.getAdminDescription());
-        // username -> userUuid (Keycloak)
+            // username -> userUuid (Keycloak)
             commonLookupService.resolveKeycloakUserIdByUsername(dto.getUsername())
                     .ifPresent(uuidStr -> {
                         try {
                             device.setUserUuid(UUID.fromString(uuidStr));
                         } catch (IllegalArgumentException ignored) {}
                     });
-        // (선택) 기존 Users 연관 유지가 필요하면 아래 주석 해제
-        // commonLookupService.findUserByUsername(dto.getUsername())
-        //         .ifPresent(device::setUserId);
+            // (선택) 기존 Users 연관 유지가 필요하면 아래 주석 해제
+            // commonLookupService.findUserByUsername(dto.getUsername())
+            //         .ifPresent(device::setUserId);
             devicesRepository.save(device);
         }
     }
+
     public List<DeviceDto> findAvailableDevices() {
         List<Devices> devices = devicesRepository.findAllWithApprovals();
         return devices.stream()
@@ -105,18 +114,19 @@ public class DeviceService {
         String operatorUsername = resolveOperatorUsername(operatorOverride);
         validateOperatorUser(operatorUsername);
 
-        Optional<ApprovalDevices> latestApproval = device.getApprovalDevices().stream()
-                .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
-                        Comparator.nullsFirst(Comparator.naturalOrder())));
-
-        latestApproval.ifPresent(approval -> {
-            if (Constants.APPROVAL_WAITING.equals(approval.getApprovalInfo())) {
-                if (Constants.DISPOSE_TYPE.equals(approval.getType())) {
-                    approval.setApprovalInfo(Constants.APPROVAL_COMPLETED);
-                } else {
-                    approval.setApprovalInfo(Constants.APPROVAL_REJECT);
-                }
-                approvalDevicesRepository.save(approval);
+        findLatestDetail(device).ifPresent(detail -> {
+            ApprovalRequest request = detail.getRequest();
+            if (request == null) {
+                return;
+            }
+            if (detail.getAction() == DeviceApprovalAction.DISPOSAL
+                    && request.getStatus() != ApprovalStatus.APPROVED) {
+                request.markApproved();
+                approvalRequestRepository.save(request);
+            } else if (request.getStatus() == ApprovalStatus.PENDING
+                    || request.getStatus() == ApprovalStatus.IN_PROGRESS) {
+                request.markRejected();
+                approvalRequestRepository.save(request);
             }
         });
 
@@ -127,17 +137,28 @@ public class DeviceService {
         device.setUserUuid(null);
         devicesRepository.save(device);
 
-        ApprovalDevices disposalRecord = new ApprovalDevices();
-        disposalRecord.setDeviceId(device);
-        // Keycloak 사용자 기준으로 처리하며, 로컬 Users 연관은 사용하지 않음
-        disposalRecord.setType(Constants.DISPOSE_TYPE);
-        disposalRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
-        disposalRecord.setProjectId(device.getProjectId());
-        String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
-        String baseReason = trimmedReason.isEmpty() ? "관리자 즉시 폐기 처리" : trimmedReason;
-        disposalRecord.setReason(buildOperatorTaggedReason(baseReason, operatorUsername));
-        ApprovalDevices savedRecord = approvalDevicesRepository.save(disposalRecord);
-        device.getApprovalDevices().add(savedRecord);
+        ApprovalRequest disposalRequest = ApprovalRequest.builder()
+                .category(ApprovalCategory.DEVICE)
+                .status(ApprovalStatus.APPROVED)
+                .title(buildSystemTitle(DeviceApprovalAction.DISPOSAL, device))
+                .reason(buildOperatorTaggedReason(
+                        Optional.ofNullable(reason).map(String::trim).filter(r -> !r.isEmpty())
+                                .orElse("관리자 즉시 폐기 처리"),
+                        operatorUsername))
+                .build();
+        disposalRequest.setSubmittedAt(LocalDateTime.now());
+        disposalRequest.setCompletedAt(LocalDateTime.now());
+
+        DeviceApprovalDetail detail = DeviceApprovalDetail.create();
+        detail.setDevice(device);
+        detail.setAction(DeviceApprovalAction.DISPOSAL);
+        detail.setRequestedStatus(Constants.DISPOSE_TYPE);
+        detail.setRequestedProject(device.getProjectId());
+        detail.setRequestedRealUser(operatorUsername);
+        detail.attachTo(disposalRequest);
+        device.getApprovalDetails().add(detail);
+
+        approvalRequestRepository.save(disposalRequest);
 
         return new DeviceDto(device, buildHistory(deviceId));
     }
@@ -158,17 +179,28 @@ public class DeviceService {
         device.setIsUsable(Boolean.TRUE);
         devicesRepository.save(device);
 
-        ApprovalDevices recoveryRecord = new ApprovalDevices();
-        recoveryRecord.setDeviceId(device);
-        recoveryRecord.setType(Constants.RECOVER_TYPE);
-        recoveryRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
-        recoveryRecord.setProjectId(device.getProjectId());
-        String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
-        String baseReason = trimmedReason.isEmpty() ? "관리자 복구 처리" : trimmedReason;
-        recoveryRecord.setReason(buildOperatorTaggedReason(baseReason, operatorUsername));
+        ApprovalRequest recoveryRequest = ApprovalRequest.builder()
+                .category(ApprovalCategory.DEVICE)
+                .status(ApprovalStatus.APPROVED)
+                .title(buildSystemTitle(DeviceApprovalAction.RECOVERY, device))
+                .reason(buildOperatorTaggedReason(
+                        Optional.ofNullable(reason).map(String::trim).filter(r -> !r.isEmpty())
+                                .orElse("관리자 복구 처리"),
+                        operatorUsername))
+                .build();
+        recoveryRequest.setSubmittedAt(LocalDateTime.now());
+        recoveryRequest.setCompletedAt(LocalDateTime.now());
 
-        ApprovalDevices savedRecord = approvalDevicesRepository.save(recoveryRecord);
-        device.getApprovalDevices().add(savedRecord);
+        DeviceApprovalDetail detail = DeviceApprovalDetail.create();
+        detail.setDevice(device);
+        detail.setAction(DeviceApprovalAction.RECOVERY);
+        detail.setRequestedStatus(Constants.NORMAL_TYPE);
+        detail.setRequestedProject(device.getProjectId());
+        detail.setRequestedRealUser(operatorUsername);
+        detail.attachTo(recoveryRequest);
+        device.getApprovalDetails().add(detail);
+
+        approvalRequestRepository.save(recoveryRequest);
 
         return new DeviceDto(device, buildHistory(deviceId));
     }
@@ -211,38 +243,62 @@ public class DeviceService {
     }
 
     private boolean isDeviceAvailable(Devices device) {
-        Optional<ApprovalDevices> latestApproval = device.getApprovalDevices().stream()
-                .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
-                        Comparator.nullsFirst(Comparator.naturalOrder())));
-        if (latestApproval.isEmpty()) {
+        Optional<DeviceApprovalDetail> latestDetail = findLatestDetail(device);
+        if (latestDetail.isEmpty()) {
             return Boolean.TRUE.equals(device.getIsUsable());
         }
 
-        ApprovalDevices approval = latestApproval.get();
-        boolean returnWaiting = Constants.APPROVAL_RETURN.equals(approval.getType()) &&
-                (Constants.APPROVAL_WAITING.equals(approval.getApprovalInfo()) ||
-                        Constants.APPROVAL_COMPLETED.equals(approval.getApprovalInfo()));
-        boolean rentalRejected = Constants.APPROVAL_RENTAL.equals(approval.getType()) &&
-                Constants.APPROVAL_REJECT.equals(approval.getApprovalInfo());
+        DeviceApprovalDetail detail = latestDetail.get();
+        ApprovalRequest request = detail.getRequest();
+        DeviceApprovalAction action = detail.getAction();
+        ApprovalStatus status = request != null ? request.getStatus() : null;
+
+        boolean returnWaiting = action == DeviceApprovalAction.RETURN &&
+                (status == ApprovalStatus.PENDING || status == ApprovalStatus.APPROVED);
+        boolean rentalRejected = action == DeviceApprovalAction.RENTAL && status == ApprovalStatus.REJECTED;
 
         return returnWaiting || rentalRejected || Boolean.TRUE.equals(device.getIsUsable());
     }
 
+    private Optional<DeviceApprovalDetail> findLatestDetail(Devices device) {
+        return device.getApprovalDetails().stream()
+                .max(Comparator.comparing(
+                        detail -> Optional.ofNullable(detail.getRequest())
+                                .map(ApprovalRequest::getCreatedDate)
+                                .orElse(null),
+                        Comparator.nullsFirst(Comparator.naturalOrder())));
+    }
+
     private List<Map<String, Object>> buildHistory(String deviceId) {
-        List<ApprovalDevices> histories = approvalDevicesRepository.findHistoryByDeviceId(deviceId);
+        List<DeviceApprovalDetail> histories = deviceApprovalDetailRepository.findHistoryByDevice(deviceId);
         List<Map<String, Object>> historyList = new ArrayList<>();
-        for (ApprovalDevices history : histories) {
+        for (DeviceApprovalDetail detail : histories) {
             Map<String, Object> map = new HashMap<>();
-            Optional<String> dbUsername = Optional.ofNullable(history.getUserId()).map(Users::getUsername);
-            Optional<String> operatorFromReason = extractOperatorFromReason(history.getReason());
-            map.put("username", dbUsername.or(() -> operatorFromReason).orElse("알 수 없음"));
+            ApprovalRequest request = detail.getRequest();
+
+            Optional<String> requesterName = Optional.ofNullable(request)
+                    .map(ApprovalRequest::getRequesterName)
+                    .filter(name -> name != null && !name.isBlank());
+            if (requesterName.isEmpty()) {
+                requesterName = Optional.ofNullable(request)
+                        .map(ApprovalRequest::getRequester)
+                        .map(Users::getUsername);
+            }
+
+            Optional<String> operatorFromReason = extractOperatorFromReason(
+                    Optional.ofNullable(request).map(ApprovalRequest::getReason).orElse(null));
+
+            map.put("username", requesterName.or(() -> operatorFromReason).orElse("알 수 없음"));
             operatorFromReason.ifPresent(value -> map.put("operatorUsername", value));
-            map.put("reason", history.getReason());
-        map.put("type", history.getType());
-        map.put("projectName", Optional.ofNullable(history.getProjectId())
-            .map(project -> project.getName())
-            .orElse(null));
-            map.put("modifiedDate", history.getModifiedDate());
+            map.put("reason", Optional.ofNullable(request).map(ApprovalRequest::getReason).orElse(detail.getMemo()));
+            map.put("type", Optional.ofNullable(detail.getAction()).map(DeviceApprovalAction::getDisplayName).orElse(null));
+            map.put("projectName", Optional.ofNullable(detail.getRequestedProject())
+                    .map(Projects::getName)
+                    .orElse(Optional.ofNullable(detail.getDevice())
+                            .map(Devices::getProjectId)
+                            .map(project -> project != null ? project.getName() : null)
+                            .orElse(null)));
+            map.put("modifiedDate", Optional.ofNullable(request).map(ApprovalRequest::getModifiedDate).orElse(null));
             historyList.add(map);
         }
         return historyList;
@@ -257,6 +313,14 @@ public class DeviceService {
             return baseReason;
         }
         return baseReason + suffix;
+    }
+
+    private String buildSystemTitle(DeviceApprovalAction action, Devices device) {
+        String deviceId = device != null ? device.getId() : null;
+        if (deviceId == null || deviceId.isBlank()) {
+            return "시스템 " + action.getDisplayName();
+        }
+        return "시스템 " + action.getDisplayName() + " - " + deviceId;
     }
 
     private String resolveOperatorUsername(String operatorOverride) {

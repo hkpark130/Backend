@@ -1,6 +1,7 @@
 package kr.co.direa.backoffice.dto;
 
-import kr.co.direa.backoffice.domain.ApprovalDevices;
+import kr.co.direa.backoffice.domain.ApprovalRequest;
+import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.DeviceTag;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
@@ -77,14 +78,21 @@ public class DeviceDto implements Serializable {
                 .map(tag -> tag.getName())
                 .toList();
 
-        Optional<ApprovalDevices> latestApprovalDevice = entity.getApprovalDevices().stream()
-                .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
-                        Comparator.nullsFirst(Comparator.naturalOrder())));
+    Optional<DeviceApprovalDetail> latestApprovalDevice = entity.getApprovalDetails().stream()
+        .max(Comparator.comparing(
+            detail -> Optional.ofNullable(detail.getRequest())
+                .map(ApprovalRequest::getCreatedDate)
+                .orElse(null),
+            Comparator.nullsFirst(Comparator.naturalOrder())));
         latestApprovalDevice.ifPresent(approval -> {
-            this.approvalInfo = approval.getApprovalInfo();
-            this.approvalType = approval.getType();
-            this.deadline = approval.getDeadline();
-            this.approvalId = approval.getId();
+        this.approvalInfo = Optional.ofNullable(approval.getRequest())
+            .map(request -> request.getStatus().getDisplayName())
+            .orElse(null);
+        this.approvalType = Optional.ofNullable(approval.getAction())
+            .map(action -> action.getDisplayName())
+            .orElse(null);
+        this.deadline = Optional.ofNullable(approval.getRequest()).map(ApprovalRequest::getDueDate).orElse(null);
+        this.approvalId = Optional.ofNullable(approval.getRequest()).map(ApprovalRequest::getId).orElse(null);
         });
         this.history = history;
     }

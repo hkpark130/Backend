@@ -32,8 +32,8 @@ public class Devices extends BaseTimeEntity {
     @Column(name = "user_uuid")
     private UUID userUuid;
 
-    @OneToMany(mappedBy = "deviceId", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
-    private List<ApprovalDevices> approvalDevices = new ArrayList<>();
+    @OneToMany(mappedBy = "device", fetch = FetchType.LAZY, cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<DeviceApprovalDetail> approvalDetails = new ArrayList<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "manage_dep")
@@ -88,7 +88,7 @@ public class Devices extends BaseTimeEntity {
     public Devices(String id, Users userId, Departments manageDep, Categories categoryId, String spec,
                    Long price, String model, String description, String company,
                    Projects projectId, String sn, String status, Boolean isUsable, String purpose, Date purchaseDate,
-                   List<ApprovalDevices> approvalDevices, String adminDescription) {
+                   List<DeviceApprovalDetail> approvalDetails, String adminDescription) {
         this.id = id;
         this.userId = userId;
         this.manageDep = manageDep;
@@ -105,7 +105,7 @@ public class Devices extends BaseTimeEntity {
         this.isUsable = isUsable;
         this.purpose = purpose;
         this.purchaseDate = purchaseDate;
-        this.approvalDevices = approvalDevices;
+    this.approvalDetails = approvalDetails;
     }
 
     public void update(Categories category, Projects project, Departments manageDep, long price, String status,

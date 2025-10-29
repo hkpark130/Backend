@@ -12,13 +12,13 @@ public interface DevicesRepository extends JpaRepository<Devices, String> {
 
     Long countByCategoryIdAndIsUsable(Categories category, boolean isUsable);
 
-    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDevices")
+    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDetails")
     List<Devices> findAllWithApprovals();
 
-    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDevices WHERE d.status <> :status")
+    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDetails WHERE d.status <> :status")
     List<Devices> findAllWithApprovalsAndStatusNot(@Param("status") String status);
 
-    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDevices WHERE d.status = :status")
+    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDetails WHERE d.status = :status")
     List<Devices> findAllWithApprovalsAndStatus(@Param("status") String status);
 
     @Query(value = "SELECT d FROM Devices d WHERE d.status <> :status")

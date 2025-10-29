@@ -1,8 +1,12 @@
 package kr.co.direa.backoffice.dto;
 
-import kr.co.direa.backoffice.domain.ApprovalDevices;
-import kr.co.direa.backoffice.domain.Approver;
+import java.time.LocalDateTime;
+import java.util.Optional;
+
+import kr.co.direa.backoffice.domain.ApprovalRequest;
+import kr.co.direa.backoffice.domain.ApprovalStep;
 import kr.co.direa.backoffice.domain.Users;
+import kr.co.direa.backoffice.domain.enums.StepStatus;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -14,21 +18,22 @@ public class ApproverDto {
     private String username;
     private Boolean isApproved;
     private int step;
+    private String status;
+    private LocalDateTime decidedAt;
+    private String comment;
 
-    public ApproverDto(Approver entity) {
-        this.username = entity.getUsers().getUsername();
-        this.userId = entity.getUsers().getId();
-        this.approvalId = entity.getApprovals().getId();
-        this.isApproved = entity.getIsApproved();
-        this.step = entity.getStep();
-    }
-
-    public Approver toEntity() {
-        return Approver.builder()
-                .users(Users.builder().username(username).build())
-                .approvals(ApprovalDevices.builder().id(approvalId).build())
-                .isApproved(isApproved)
-                .step(step)
-                .build();
+    public ApproverDto(ApprovalStep entity) {
+        Users approver = entity.getApprover();
+        this.username = Optional.ofNullable(approver)
+                .map(Users::getUsername)
+                .orElse(entity.getApproverName());
+        this.userId = Optional.ofNullable(approver).map(Users::getId).orElse(null);
+        ApprovalRequest request = entity.getRequest();
+        this.approvalId = request != null ? request.getId() : null;
+        this.step = entity.getSequence();
+        this.isApproved = entity.getStatus() == StepStatus.APPROVED;
+        this.status = entity.getStatus().getDisplayName();
+        this.decidedAt = entity.getDecidedAt();
+        this.comment = entity.getComment();
     }
 }
