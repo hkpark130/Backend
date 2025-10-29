@@ -13,6 +13,15 @@ jasypt:
   encryptor:
     password: mySecretKey
 
+constants:
+  keycloak-url: ENC(6UeJ0QC/B9zHz+T/wXKKWgXJ5/FYBK7xF/dWVCpNweN14MZNdJ9fXbDYax1nBwyWg8X1huwRtyE5IhPrn9V7SQ==)
+  client-secret: ENC(qSvRXUFAk4C9Xtt/B1jEA0G7+0hvvhg1mdmeTAKTrAAOMrv1kGy3XGTuASCtksADAtj9/EUh3Lo9fEIKZV+hOuZEYOLKTKWYWVXTynEStSg=)
+  admin: admin
+  admin-id: admin
+  admin-pw: keycloak
+  realm: ENC(kbWdaszp7HSheIPFaLRmc0NBJLbEmCrnVWVQmNM7QcX057IeT3I3wDU7ufjNWnCX)
+  admin-group-id: ENC(j264nBfm3L46eTho2ivWb6pLBRQ8zUAhru38+ld2p8YxB3aZTJzOWcqbre8NL8ZZvhWlBfNAZ6tt2fLa0YR63YZJU9M7QEsiEMfr6zuCXM8=)
+
 # Local profile: in-memory H2 DB, H2 console enabled, verbose SQL
 spring:
   config:
@@ -60,14 +69,26 @@ app:
   keycloak:
     url: https://keycloak.direa.synology.me/auth
     realm: sso
-    admin-client-id: back-office-api
-    admin-client-secret: PGECw0T1tVC5xlfPWwkjjchYwrnZc7eF
+    admin-client-id: admin-cli
   ldap:
-    user-base: ${APP_LDAP_USER_BASE:ou=people}
+    user-base: ${APP_LDAP_USER_BASE:ou=Groups}
     login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
     password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
 
 ---
+jasypt:
+  encryptor:
+    password: ${JASYPT_KEY}
+
+constants:
+  keycloak-url: "https://keycloak.direa.synology.me"
+  client-secret: ENC(mwGuQuXgOPVZ+upjEIGrt9fJMwuc7omECSvUOtaZr1ylbEqN/x+Jp5eh4tx9qQb9YEhQiOz464nJVmh2jJAvkaLdMnq6uwwmX8NfN+IVAxI=)
+  admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
+  admin-id: ENC(RNu0pvdPsdYlgv4rJqH5rvYY55pIddi3gCSyTzutMRqo1DeqeNN+ukCsRIqPYoGd9EXaSxr20rYjHpm+hc+CvfpJ//0TgFjnoe5+JxtqcGY=)
+  admin-pw: ENC(9wsj63HOG5z6ursBEi7VzmwGMd/8jH/TyD1IRngtWqDvUvL04TtKPEFQxyIAY0OA)
+  realm: ENC(rW4Ij4d66yAHbzdxzQnWAcPib/iNmYJloRByJHiG0Qqm0bNDbjNzp5LrSdzvL7QG)
+  admin-group-id: ENC(WmXJE0dvsIouiJP9uimG+4VciSGhTPusYQ/PCYBMItQwTtK0q5CNYrmdLCkuf5VNk/fTZC4E3TaWGcoAZMtKIVD30J15WSM+83YPygVJv8s=)
+
 # Prod profile: external DB, stricter JPA, no H2 console, minimal logs
 spring:
   config:
@@ -79,7 +100,7 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: ${DB_DRIVER:}
   ldap:
-    password: ${SPRING_LDAP_PASSWORD}
+    password: ENC(1jwk9pXRQGcdTUnm/HMfinGjMUJEfSrmKDvLEVvPOBY9pqQSD9ebmLp+vmKTYR5I)
   jpa:
     hibernate:
       ddl-auto: validate

@@ -46,6 +46,14 @@ public class CommonLookupService {
     private String keycloakAdminClientId;
     @Value("${app.keycloak.admin-client-secret:}")
     private String keycloakAdminClientSecret;
+    @Value("${constants.admin:}")
+    private String keycloakAdminUsername;
+    @Value("${constants.admin-id:}")
+    private String keycloakAdminUserId;
+    @Value("${constants.admin-pw:}")
+    private String keycloakAdminPassword;
+    @Value("${constants.admin-group-id:}")
+    private String keycloakAdminGroupId;
 
     public Optional<Categories> findCategoryByName(String name) {
         if (name == null || name.isBlank()) return Optional.empty();
@@ -110,12 +118,17 @@ public class CommonLookupService {
      */
     public Optional<String> resolveKeycloakUserIdByUsername(String username) {
         if (username == null || username.isBlank()) return Optional.empty();
-        if (isBlank(keycloakUrl) || isBlank(keycloakRealm) || isBlank(keycloakAdminClientId) || isBlank(keycloakAdminClientSecret)) {
+        if (!isBlank(keycloakAdminUsername) && username.equalsIgnoreCase(keycloakAdminUsername) && !isBlank(keycloakAdminUserId)) {
+            return Optional.of(keycloakAdminUserId);
+        }
+        if (isBlank(keycloakUrl) || isBlank(keycloakRealm) || isBlank(keycloakAdminClientId)) {
             return Optional.empty();
         }
         try {
             String token = getKeycloakAdminAccessToken().orElse(null);
-            if (token == null) return Optional.empty();
+            if (token == null) {
+                return Optional.empty();
+            }
 
             String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
             String url = keycloakUrl + "/admin/realms/" + keycloakRealm + "/users?username=" + encoded + "&exact=true";
@@ -132,40 +145,125 @@ public class CommonLookupService {
                     entity,
                     new ParameterizedTypeReference<List<Map<String,Object>>>() {}
             );
-            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null || resp.getBody().isEmpty()) return Optional.empty();
+            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null || resp.getBody().isEmpty()) {
+                return Optional.empty();
+            }
 
             Map<String,Object> first = resp.getBody().get(0);
             Object id = first.get("id");
-            if (id != null) return Optional.of(id.toString());
+            if (id != null) {
+                return Optional.of(id.toString());
+            }
         } catch (Exception ignored) {
+            return Optional.empty();
         }
         return Optional.empty();
     }
 
+    /**
+     * 주어진 사용자가 Keycloak Admin 그룹에 속하는지 확인합니다.
+     * - admin 기본 계정(username)이면 바로 true
+     * - 그룹 ID 설정 및 Keycloak Admin API가 정상 동작할 경우 그룹 소속 여부를 조회
+     */
+    public boolean isAdminUser(String username) {
+        if (username == null || username.isBlank()) {
+            return false;
+        }
+        if (isBlank(keycloakAdminGroupId)) {
+            return false;
+        }
+        var userId = resolveKeycloakUserIdByUsername(username).orElse(null);
+        if (isBlank(userId)) {
+            return false;
+        }
+        return isUserInGroup(userId, keycloakAdminGroupId);
+    }
+
     private Optional<String> getKeycloakAdminAccessToken() {
+        if (isBlank(keycloakUrl) || isBlank(keycloakRealm)) {
+            return Optional.empty();
+        }
+        if (isBlank(keycloakAdminClientId)) {
+            return Optional.empty();
+        }
         try {
             String url = keycloakUrl + "/realms/" + keycloakRealm + "/protocol/openid-connect/token";
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-            form.add("grant_type", "client_credentials");
-            form.add("client_id", keycloakAdminClientId);
-            form.add("client_secret", keycloakAdminClientSecret);
+            boolean usingPasswordGrant = !isBlank(keycloakAdminUsername) && !isBlank(keycloakAdminPassword);
+            if (usingPasswordGrant) {
+                form.add("grant_type", "password");
+                form.add("client_id", keycloakAdminClientId);
+                if (!isBlank(keycloakAdminClientSecret)) {
+                    form.add("client_secret", keycloakAdminClientSecret);
+                }
+                form.add("username", keycloakAdminUsername);
+                form.add("password", keycloakAdminPassword);
+            } else {
+                if (isBlank(keycloakAdminClientSecret)) {
+                    return Optional.empty();
+                }
+                form.add("grant_type", "client_credentials");
+                form.add("client_id", keycloakAdminClientId);
+                form.add("client_secret", keycloakAdminClientSecret);
+            }
 
             HttpEntity<MultiValueMap<String, String>> req = new HttpEntity<>(form, headers);
-        RestTemplate rt = new RestTemplate();
-        ResponseEntity<Map<String,Object>> resp = rt.exchange(
-            url,
-            HttpMethod.POST,
-            req,
-            new ParameterizedTypeReference<Map<String,Object>>() {}
-        );
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) return Optional.empty();
-        Object token = resp.getBody().get("access_token");
+            RestTemplate rt = new RestTemplate();
+            ResponseEntity<Map<String,Object>> resp = rt.exchange(
+                    url,
+                    HttpMethod.POST,
+                    req,
+                    new ParameterizedTypeReference<Map<String,Object>>() {}
+            );
+            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+                return Optional.empty();
+            }
+            Object token = resp.getBody().get("access_token");
             return Optional.ofNullable(token).map(Object::toString).filter(s -> !s.isBlank());
         } catch (Exception ignored) {
             return Optional.empty();
+        }
+    }
+
+    private boolean isUserInGroup(String userId, String groupId) {
+        if (isBlank(userId) || isBlank(groupId)) {
+            return false;
+        }
+        if (isBlank(keycloakUrl) || isBlank(keycloakRealm)) {
+            return false;
+        }
+        String token = getKeycloakAdminAccessToken().orElse(null);
+        if (token == null) {
+            return false;
+        }
+        try {
+            String url = keycloakUrl + "/admin/realms/" + keycloakRealm + "/users/" + userId + "/groups";
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + token);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+            RestTemplate rt = new RestTemplate();
+            ResponseEntity<List<Map<String, Object>>> resp = rt.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    new ParameterizedTypeReference<List<Map<String, Object>>>() {}
+            );
+            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+                return false;
+            }
+            boolean matched = resp.getBody().stream()
+                    .map(group -> group.get("id"))
+                    .filter(id -> id != null)
+                    .anyMatch(id -> groupId.equals(id.toString()));
+            return matched;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 

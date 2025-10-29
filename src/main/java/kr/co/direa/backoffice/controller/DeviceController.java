@@ -2,6 +2,7 @@ package kr.co.direa.backoffice.controller;
 
 import kr.co.direa.backoffice.dto.DeviceDto;
 import kr.co.direa.backoffice.dto.DeviceDisposeRequest;
+import kr.co.direa.backoffice.dto.DeviceRecoveryRequest;
 import kr.co.direa.backoffice.service.DeviceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +34,11 @@ public class DeviceController {
         return ResponseEntity.ok(deviceService.findAllDevicesForAdmin());
     }
 
+    @GetMapping("/admin/devices/disposed")
+    public ResponseEntity<List<DeviceDto>> getDisposedDevices() {
+        return ResponseEntity.ok(deviceService.findDisposedDevicesForAdmin());
+    }
+
     @GetMapping("/device/{id}")
     // TODO 인증 연동 시: 장비 상세 조회 역시 로그인 사용자 권한 확인 후 제공하도록 보호 필요
     public ResponseEntity<DeviceDto> getDevice(@PathVariable String id) {
@@ -50,6 +56,14 @@ public class DeviceController {
         String reason = request != null ? request.reason() : null;
         String operator = request != null ? request.operatorUsername() : null;
         return ResponseEntity.ok(deviceService.disposeDeviceByAdmin(id, reason, operator));
+    }
+
+    @PostMapping("/admin/devices/{id}/recover")
+    public ResponseEntity<DeviceDto> recoverDevice(@PathVariable String id,
+                                                   @RequestBody(required = false) DeviceRecoveryRequest request) {
+        String reason = request != null ? request.reason() : null;
+        String operator = request != null ? request.operatorUsername() : null;
+        return ResponseEntity.ok(deviceService.recoverDeviceByAdmin(id, reason, operator));
     }
 
     // Bulk 등록 API

@@ -18,6 +18,9 @@ public interface DevicesRepository extends JpaRepository<Devices, String> {
     @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDevices WHERE d.status <> :status")
     List<Devices> findAllWithApprovalsAndStatusNot(@Param("status") String status);
 
+    @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDevices WHERE d.status = :status")
+    List<Devices> findAllWithApprovalsAndStatus(@Param("status") String status);
+
     @Query(value = "SELECT d FROM Devices d WHERE d.status <> :status")
     List<Devices> findByStatusNot(@Param("status") String status);
 

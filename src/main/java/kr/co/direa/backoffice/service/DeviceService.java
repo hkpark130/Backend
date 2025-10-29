@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -25,6 +27,8 @@ public class DeviceService {
     private final DevicesRepository devicesRepository;
     private final ApprovalDevicesRepository approvalDevicesRepository;
     private final CommonLookupService commonLookupService;
+
+    private static final Pattern OPERATOR_SUFFIX_PATTERN = Pattern.compile("\\(처리자: (?<username>.+?)\\)$");
 
     // Bulk 등록 메서드
     @Transactional
@@ -80,6 +84,13 @@ public class DeviceService {
                 .toList();
     }
 
+    public List<DeviceDto> findDisposedDevicesForAdmin() {
+        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatus(Constants.DISPOSE_TYPE);
+        return devices.stream()
+                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
+                .toList();
+    }
+
     public DeviceDto findById(String id) {
         Devices device = devicesRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Device not found: " + id));
@@ -88,50 +99,78 @@ public class DeviceService {
 
     @Transactional
     public DeviceDto disposeDeviceByAdmin(String deviceId, String reason, String operatorOverride) {
-    Devices device = devicesRepository.findById(deviceId)
-        .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
+        Devices device = devicesRepository.findById(deviceId)
+                .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
 
-    String operatorUsername = commonLookupService.currentUsernameFromJwt()
-        .or(() -> Optional.ofNullable(operatorOverride).filter(s -> !s.isBlank()))
-        .orElseThrow(() -> new IllegalStateException("인증된 사용자 정보를 찾을 수 없습니다."));
+        String operatorUsername = resolveOperatorUsername(operatorOverride);
+        validateOperatorUser(operatorUsername);
 
-    Users operator = commonLookupService.findUserByUsername(operatorUsername)
-        .orElseThrow(() -> new IllegalArgumentException("User not found: " + operatorUsername));
+        Optional<ApprovalDevices> latestApproval = device.getApprovalDevices().stream()
+                .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
+                        Comparator.nullsFirst(Comparator.naturalOrder())));
 
-    Optional<ApprovalDevices> latestApproval = device.getApprovalDevices().stream()
-        .max(Comparator.comparing(ApprovalDevices::getCreatedDate,
-            Comparator.nullsFirst(Comparator.naturalOrder())));
-
-    latestApproval.ifPresent(approval -> {
-        if (Constants.APPROVAL_WAITING.equals(approval.getApprovalInfo())) {
+        latestApproval.ifPresent(approval -> {
+            if (Constants.APPROVAL_WAITING.equals(approval.getApprovalInfo())) {
                 if (Constants.DISPOSE_TYPE.equals(approval.getType())) {
                     approval.setApprovalInfo(Constants.APPROVAL_COMPLETED);
                 } else {
                     approval.setApprovalInfo(Constants.APPROVAL_REJECT);
                 }
-        approvalDevicesRepository.save(approval);
+                approvalDevicesRepository.save(approval);
+            }
+        });
+
+        device.setStatus(Constants.DISPOSE_TYPE);
+        device.setIsUsable(Boolean.FALSE);
+        device.setUserId(null);
+        device.setRealUser(null);
+        device.setUserUuid(null);
+        devicesRepository.save(device);
+
+        ApprovalDevices disposalRecord = new ApprovalDevices();
+        disposalRecord.setDeviceId(device);
+        // Keycloak 사용자 기준으로 처리하며, 로컬 Users 연관은 사용하지 않음
+        disposalRecord.setType(Constants.DISPOSE_TYPE);
+        disposalRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
+        disposalRecord.setProjectId(device.getProjectId());
+        String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
+        String baseReason = trimmedReason.isEmpty() ? "관리자 즉시 폐기 처리" : trimmedReason;
+        disposalRecord.setReason(buildOperatorTaggedReason(baseReason, operatorUsername));
+        ApprovalDevices savedRecord = approvalDevicesRepository.save(disposalRecord);
+        device.getApprovalDevices().add(savedRecord);
+
+        return new DeviceDto(device, buildHistory(deviceId));
+    }
+
+    @Transactional
+    public DeviceDto recoverDeviceByAdmin(String deviceId, String reason, String operatorOverride) {
+        Devices device = devicesRepository.findById(deviceId)
+                .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
+
+        if (!Constants.DISPOSE_TYPE.equals(device.getStatus())) {
+            throw new IllegalStateException("Disposed device만 복구할 수 있습니다.");
         }
-    });
 
-    device.setStatus(Constants.DISPOSE_TYPE);
-    device.setIsUsable(Boolean.FALSE);
-    device.setUserId(null);
-    device.setRealUser(null);
-    device.setUserUuid(null);
-    devicesRepository.save(device);
+        String operatorUsername = resolveOperatorUsername(operatorOverride);
+        validateOperatorUser(operatorUsername);
 
-    ApprovalDevices disposalRecord = new ApprovalDevices();
-    disposalRecord.setDeviceId(device);
-    disposalRecord.setUserId(operator);
-    disposalRecord.setType(Constants.DISPOSE_TYPE);
-    disposalRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
-    disposalRecord.setProjectId(device.getProjectId());
-    String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
-    disposalRecord.setReason(trimmedReason.isEmpty() ? "관리자 즉시 폐기 처리" : trimmedReason);
-    ApprovalDevices savedRecord = approvalDevicesRepository.save(disposalRecord);
-    device.getApprovalDevices().add(savedRecord);
+        device.setStatus(Constants.NORMAL_TYPE);
+        device.setIsUsable(Boolean.TRUE);
+        devicesRepository.save(device);
 
-    return new DeviceDto(device, buildHistory(deviceId));
+        ApprovalDevices recoveryRecord = new ApprovalDevices();
+        recoveryRecord.setDeviceId(device);
+        recoveryRecord.setType(Constants.RECOVER_TYPE);
+        recoveryRecord.setApprovalInfo(Constants.APPROVAL_COMPLETED);
+        recoveryRecord.setProjectId(device.getProjectId());
+        String trimmedReason = Optional.ofNullable(reason).map(String::trim).orElse("");
+        String baseReason = trimmedReason.isEmpty() ? "관리자 복구 처리" : trimmedReason;
+        recoveryRecord.setReason(buildOperatorTaggedReason(baseReason, operatorUsername));
+
+        ApprovalDevices savedRecord = approvalDevicesRepository.save(recoveryRecord);
+        device.getApprovalDevices().add(savedRecord);
+
+        return new DeviceDto(device, buildHistory(deviceId));
     }
 
     @Transactional
@@ -194,7 +233,11 @@ public class DeviceService {
         List<Map<String, Object>> historyList = new ArrayList<>();
         for (ApprovalDevices history : histories) {
             Map<String, Object> map = new HashMap<>();
-            map.put("username", Optional.ofNullable(history.getUserId()).map(Users::getUsername).orElse("알 수 없음"));
+            Optional<String> dbUsername = Optional.ofNullable(history.getUserId()).map(Users::getUsername);
+            Optional<String> operatorFromReason = extractOperatorFromReason(history.getReason());
+            map.put("username", dbUsername.or(() -> operatorFromReason).orElse("알 수 없음"));
+            operatorFromReason.ifPresent(value -> map.put("operatorUsername", value));
+            map.put("reason", history.getReason());
         map.put("type", history.getType());
         map.put("projectName", Optional.ofNullable(history.getProjectId())
             .map(project -> project.getName())
@@ -203,5 +246,44 @@ public class DeviceService {
             historyList.add(map);
         }
         return historyList;
+    }
+
+    private String buildOperatorTaggedReason(String baseReason, String operatorUsername) {
+        if (operatorUsername == null || operatorUsername.isBlank()) {
+            return baseReason;
+        }
+        String suffix = " (처리자: " + operatorUsername + ")";
+        if (baseReason.endsWith(suffix)) {
+            return baseReason;
+        }
+        return baseReason + suffix;
+    }
+
+    private String resolveOperatorUsername(String operatorOverride) {
+        return commonLookupService.currentUsernameFromJwt()
+                .or(() -> Optional.ofNullable(operatorOverride).filter(s -> !s.isBlank()))
+                .orElseThrow(() -> new IllegalStateException("인증된 사용자 정보를 찾을 수 없습니다."));
+    }
+
+    private void validateOperatorUser(String operatorUsername) {
+        boolean operatorIsAdmin = commonLookupService.isAdminUser(operatorUsername);
+        if (!operatorIsAdmin) {
+            commonLookupService.resolveKeycloakUserIdByUsername(operatorUsername)
+                    .orElseThrow(() -> new IllegalArgumentException("Keycloak user not found: " + operatorUsername));
+        }
+    }
+
+    private Optional<String> extractOperatorFromReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return Optional.empty();
+        }
+        Matcher matcher = OPERATOR_SUFFIX_PATTERN.matcher(reason.trim());
+        if (matcher.find()) {
+            String username = matcher.group("username");
+            if (username != null && !username.isBlank()) {
+                return Optional.of(username.trim());
+            }
+        }
+        return Optional.empty();
     }
 }
