@@ -15,12 +15,12 @@ public class NotificationService {
 	private final NotificationsRepository notificationsRepository;
 
 	@Transactional
-	public void createNotification(String receiver, String subject, String type, String link) {
-		if (receiver == null || receiver.isBlank()) {
+	public void createNotification(String receiverId, String subject, String type, String link) {
+		if (receiverId == null || receiverId.isBlank()) {
 			return;
 		}
 		Notifications notification = Notifications.builder()
-				.receiver(receiver)
+				.receiver(receiverId)
 				.subject(subject)
 				.type(type)
 				.link(link)

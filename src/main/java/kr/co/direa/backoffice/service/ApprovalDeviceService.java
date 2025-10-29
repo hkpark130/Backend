@@ -169,7 +169,7 @@ public class ApprovalDeviceService {
             approvalCommentService.addComment(approvalId, approverUsername, reason);
         }
 
-        notifyApplicantOnRejection(approval, approverUser, reason);
+    notifyApplicantOnRejection(approval, approverUser, approverUsername, reason);
 
         return new ApprovalDeviceDto(approvalRequestRepository.save(approval));
     }
@@ -273,46 +273,46 @@ public class ApprovalDeviceService {
     }
 
     private void notifyApprover(ApprovalRequest approval, ApprovalStep step, String message) {
-    String targetEmail = Optional.ofNullable(step.getApprover())
-        .map(Users::getEmail)
-        .orElse(step.getApproverEmail());
-    if (targetEmail == null || targetEmail.isBlank()) {
+    String targetReceiver = Optional.ofNullable(step.getApprover())
+        .map(Users::getUsername)
+        .orElse(step.getApproverName());
+    if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
     String subjectPrefix = (message != null && !message.isBlank()) ? message : "[장비 결재 요청]";
     String subject = subjectPrefix + " " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetEmail, subject,
+    notificationService.createNotification(targetReceiver, subject,
                 Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
     }
 
     private void notifyApplicantOnCompletion(ApprovalRequest approval) {
-    String targetEmail = Optional.ofNullable(approval.getRequester())
-        .map(Users::getEmail)
-        .orElse(approval.getRequesterEmail());
-    if (targetEmail == null || targetEmail.isBlank()) {
+    String targetReceiver = Optional.ofNullable(approval.getRequester())
+        .map(Users::getUsername)
+        .orElse(approval.getRequesterName());
+    if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
         String subject = "[장비 결재 완료] " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetEmail, subject,
+    notificationService.createNotification(targetReceiver, subject,
                 Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
     }
 
-    private void notifyApplicantOnRejection(ApprovalRequest approval, Users approver, String reason) {
+    private void notifyApplicantOnRejection(ApprovalRequest approval, Users approver, String approverUsername, String reason) {
         String subject = "[장비 결재 반려] " + buildApprovalSubject(approval);
 
-    String requesterEmail = Optional.ofNullable(approval.getRequester())
-        .map(Users::getEmail)
-        .orElse(approval.getRequesterEmail());
-    if (requesterEmail != null && !requesterEmail.isBlank()) {
-        notificationService.createNotification(requesterEmail, subject,
+    String requesterReceiver = Optional.ofNullable(approval.getRequester())
+        .map(Users::getUsername)
+        .orElse(approval.getRequesterName());
+    if (requesterReceiver != null && !requesterReceiver.isBlank()) {
+        notificationService.createNotification(requesterReceiver, subject,
                     Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
         }
 
-    String approverEmail = Optional.ofNullable(approver)
-        .map(Users::getEmail)
-        .orElse(null);
-    if (approverEmail != null && !approverEmail.isBlank()) {
-        notificationService.createNotification(approverEmail, subject,
+    String approverReceiver = Optional.ofNullable(approver)
+        .map(Users::getUsername)
+        .orElse(approverUsername);
+    if (approverReceiver != null && !approverReceiver.isBlank()) {
+        notificationService.createNotification(approverReceiver, subject,
                     Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
         }
     }

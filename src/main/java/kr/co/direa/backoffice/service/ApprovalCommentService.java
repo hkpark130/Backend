@@ -73,27 +73,31 @@ public class ApprovalCommentService {
 
 		Set<String> receivers = new HashSet<>();
 		Optional.ofNullable(approval.getRequester())
-			.map(Users::getEmail)
-			.filter(email -> !email.isBlank())
+			.map(Users::getUsername)
+			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::add);
-		Optional.ofNullable(approval.getRequesterEmail())
-			.filter(email -> !email.isBlank())
+		Optional.ofNullable(approval.getRequesterName())
+			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::add);
 
 		if (approval.getSteps() != null) {
 			for (ApprovalStep step : approval.getSteps()) {
 				Optional.ofNullable(step.getApprover())
-					.map(Users::getEmail)
-					.filter(email -> !email.isBlank())
+					.map(Users::getUsername)
+					.filter(name -> name != null && !name.isBlank())
 					.ifPresent(receivers::add);
-				Optional.ofNullable(step.getApproverEmail())
-					.filter(email -> !email.isBlank())
+				Optional.ofNullable(step.getApproverName())
+					.filter(name -> name != null && !name.isBlank())
 					.ifPresent(receivers::add);
 			}
 		}
 
-		Optional.ofNullable(comment.getAuthorEmail())
-			.filter(email -> !email.isBlank())
+		Optional.ofNullable(comment.getUser())
+			.map(Users::getUsername)
+			.filter(name -> name != null && !name.isBlank())
+			.ifPresent(receivers::remove);
+		Optional.ofNullable(comment.getAuthorName())
+			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::remove);
 
 		for (String receiver : receivers) {
