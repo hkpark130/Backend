@@ -6,11 +6,10 @@ import lombok.Getter;
 
 @Getter
 public enum StepStatus {
-    PENDING("대기"),
-    IN_PROGRESS("진행중"),
-    APPROVED("승인"),
-    REJECTED("반려"),
-    SKIPPED("건너뜀");
+    PENDING("승인대기"),
+    IN_PROGRESS("1차승인완료"),
+    APPROVED("승인완료"),
+    REJECTED("반려");
 
     private final String displayName;
 
@@ -19,7 +18,7 @@ public enum StepStatus {
     }
 
     public boolean isDecisionMade() {
-        return this == APPROVED || this == REJECTED || this == SKIPPED;
+        return this == APPROVED || this == REJECTED;
     }
 
     public static StepStatus fromDisplayName(String displayName) {

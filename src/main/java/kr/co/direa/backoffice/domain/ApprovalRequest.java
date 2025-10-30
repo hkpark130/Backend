@@ -121,7 +121,6 @@ public class ApprovalRequest extends BaseTimeEntity {
         this.steps.forEach(ApprovalStep::reset);
         if (!this.steps.isEmpty()) {
             this.steps.get(0).begin();
-            this.status = ApprovalStatus.IN_PROGRESS;
         }
     }
 

@@ -3,6 +3,7 @@ package kr.co.direa.backoffice.controller;
 import kr.co.direa.backoffice.dto.DeviceDto;
 import kr.co.direa.backoffice.dto.DeviceDisposeRequest;
 import kr.co.direa.backoffice.dto.DeviceRecoveryRequest;
+import kr.co.direa.backoffice.dto.MyDeviceUpdateRequest;
 import kr.co.direa.backoffice.dto.PageResponse;
 import kr.co.direa.backoffice.service.DeviceService;
 import kr.co.direa.backoffice.vo.AdminDeviceSearchRequest;
@@ -11,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -35,6 +37,17 @@ public class DeviceController {
                                                                        @RequestParam(required = false) String chipValue) {
         DeviceSearchRequest request = new DeviceSearchRequest(page, size, filterField, keyword, chipValue);
         return ResponseEntity.ok(deviceService.findAvailableDevices(request));
+    }
+
+    @GetMapping("/my-devices")
+    public ResponseEntity<List<DeviceDto>> getMyDevices() {
+        return ResponseEntity.ok(deviceService.findDevicesForCurrentUser());
+    }
+
+    @PatchMapping("/my-devices/{id}")
+    public ResponseEntity<DeviceDto> updateMyDevice(@PathVariable String id,
+                                                    @RequestBody MyDeviceUpdateRequest request) {
+        return ResponseEntity.ok(deviceService.updateMyDeviceDescription(id, request.description()));
     }
 
     @GetMapping("/admin/devices")

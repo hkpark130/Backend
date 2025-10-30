@@ -6,9 +6,8 @@ import lombok.Getter;
 
 @Getter
 public enum ApprovalStatus {
-    DRAFT("임시저장"),
     PENDING("승인대기"),
-    IN_PROGRESS("진행중"),
+    IN_PROGRESS("1차승인완료"),
     APPROVED("승인완료"),
     REJECTED("반려"),
     CANCELLED("취소");

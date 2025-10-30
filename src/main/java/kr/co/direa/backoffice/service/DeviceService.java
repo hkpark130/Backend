@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -164,6 +165,14 @@ public class DeviceService {
         }
         String trimmed = keyword.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeUsernameKey(String username) {
+        String normalized = normalizeKeyword(username);
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.toLowerCase(Locale.ROOT);
     }
 
     private String normalizeChipValue(String chipValue) {
@@ -496,6 +505,116 @@ public class DeviceService {
                 .atZone(java.time.ZoneId.systemDefault())
                 .toLocalDate()
                 .toString();
+    }
+
+
+    @Transactional(readOnly = true)
+    public List<DeviceDto> findDevicesForCurrentUser() {
+        UUID userUuid = commonLookupService.currentUserIdFromJwt()
+                .flatMap(this::parseUuidSafely)
+                .orElse(null);
+
+        String normalizedUsername = commonLookupService.currentUsernameFromJwt()
+                .map(this::normalizeKeyword)
+                .orElse(null);
+        String usernameKey = normalizedUsername != null ? normalizeUsernameKey(normalizedUsername) : null;
+
+        if (userUuid == null && usernameKey == null) {
+            return List.of();
+        }
+
+        List<Devices> rawDevices = devicesRepository.findAllForUser(userUuid, usernameKey);
+        if (rawDevices.isEmpty()) {
+            return List.of();
+        }
+
+        LinkedHashSet<Devices> uniqueDevices = new LinkedHashSet<>(rawDevices);
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+
+        Comparator<DeviceDto> comparator = Comparator
+                .comparing((DeviceDto dto) -> sortableString(dto.getCategoryName()), Comparator.nullsLast(collator))
+                .thenComparing(dto -> sortableString(dto.getId()), Comparator.nullsLast(collator));
+
+        return uniqueDevices.stream()
+                .filter(device -> device.getStatus() == null || !Constants.DISPOSE_TYPE.equals(device.getStatus()))
+                .filter(device -> ownsDevice(device, usernameKey, userUuid))
+                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
+                .sorted(comparator)
+                .toList();
+    }
+
+    @Transactional
+    public DeviceDto updateMyDeviceDescription(String deviceId, String description) {
+        UUID jwtUserUuid = commonLookupService.currentUserIdFromJwt()
+                .flatMap(this::parseUuidSafely)
+                .orElse(null);
+        String normalizedUsername = commonLookupService.currentUsernameFromJwt()
+                .map(this::normalizeKeyword)
+                .orElse(null);
+
+        String usernameKey = normalizedUsername != null ? normalizeUsernameKey(normalizedUsername) : null;
+
+        UUID effectiveUuid = jwtUserUuid;
+        if (effectiveUuid == null && normalizedUsername != null) {
+            effectiveUuid = commonLookupService.resolveKeycloakUserInfoByUsername(normalizedUsername)
+                    .map(CommonLookupService.KeycloakUserInfo::id)
+                    .orElse(null);
+        }
+
+        if (effectiveUuid == null && usernameKey == null) {
+            throw new IllegalArgumentException("인증된 사용자 정보를 확인할 수 없습니다.");
+        }
+
+        Devices device = devicesRepository.findById(deviceId)
+                .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
+
+        if (!ownsDevice(device, usernameKey, effectiveUuid)) {
+            throw new IllegalArgumentException("요청한 사용자의 장비가 아닙니다.");
+        }
+
+        String normalizedDescription = Optional.ofNullable(description)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElse(null);
+
+        device.setDescription(normalizedDescription);
+        devicesRepository.save(device);
+
+        return new DeviceDto(device, buildHistory(deviceId));
+    }
+
+    private boolean ownsDevice(Devices device, String normalizedUsernameKey, UUID expectedUserUuid) {
+        if (device == null || (normalizedUsernameKey == null && expectedUserUuid == null)) {
+            return false;
+        }
+
+        if (expectedUserUuid != null) {
+            UUID deviceUuid = device.getUserUuid();
+            if (deviceUuid != null && expectedUserUuid.equals(deviceUuid)) {
+                return true;
+            }
+            UUID externalId = Optional.ofNullable(device.getUserId())
+                    .map(Users::getExternalId)
+                    .orElse(null);
+            if (externalId != null && expectedUserUuid.equals(externalId)) {
+                return true;
+            }
+        }
+
+    String realUserKey = normalizeUsernameKey(device.getRealUser());
+    return normalizedUsernameKey != null && normalizedUsernameKey.equals(realUserKey);
+    }
+
+    private Optional<UUID> parseUuidSafely(String source) {
+        if (source == null || source.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(UUID.fromString(source));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
     }
 
 

@@ -1,7 +1,7 @@
 package kr.co.direa.backoffice.service;
 
 import java.text.Collator;
-import java.time.ZoneId;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -151,6 +151,7 @@ public class ApprovalDeviceService {
             notifyApprover(approval, nextStep, message);
         } else {
             approval.markApproved();
+            applyDeviceStateOnCompletion(approval);
             notifyApplicantOnCompletion(approval);
         }
 
@@ -257,9 +258,8 @@ public class ApprovalDeviceService {
     }
 
     private List<ApprovalDeviceDto> loadPendingApprovalDtos() {
-        List<ApprovalStatus> statuses = Arrays.stream(ApprovalStatus.values())
-                .filter(status -> status != ApprovalStatus.DRAFT)
-                .toList();
+    List<ApprovalStatus> statuses = Arrays.stream(ApprovalStatus.values())
+        .toList();
 
         List<ApprovalRequest> approvals = approvalRequestRepository.findByCategoryAndStatusIn(
                 ApprovalCategory.DEVICE,
@@ -267,8 +267,8 @@ public class ApprovalDeviceService {
 
         approvals.sort(Comparator.comparing(
                 (ApprovalRequest request) -> Optional.ofNullable(request.getSubmittedAt())
-                        .orElse(request.getCreatedDate()),
-                Comparator.nullsLast(Comparator.reverseOrder())));
+            .orElse(request.getCreatedDate()),
+        Comparator.nullsLast(Comparator.naturalOrder())));
 
         return approvals.stream()
                 .map(ApprovalDeviceDto::new)
@@ -349,29 +349,60 @@ public class ApprovalDeviceService {
         String sortField = normalizeSortField(sortFieldRaw);
         boolean desc = "desc".equalsIgnoreCase(sortOrderRaw);
 
-        Comparator<ApprovalDeviceDto> comparator = switch (sortField) {
-            case "approvalId" -> Comparator.comparingLong(dto -> Optional.ofNullable(dto.getApprovalId()).orElse(Long.MAX_VALUE));
-            case "deviceId" -> Comparator.comparing(dto -> defaultString(dto.getDeviceId()), String.CASE_INSENSITIVE_ORDER);
-            case "deadline" -> Comparator.comparingLong(dto -> dto.getDeadline() == null
-                    ? Long.MAX_VALUE
-                    : dto.getDeadline().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
-            default -> Comparator.comparingLong(dto -> dto.getDeadline() == null
-                    ? Long.MAX_VALUE
-                    : dto.getDeadline().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+        Comparator<ApprovalDeviceDto> statusComparator = Comparator
+                .comparingInt(dto -> statusPriority(dto.getApprovalStatus()));
+        Comparator<ApprovalDeviceDto> submissionComparator = Comparator.comparing(
+                (ApprovalDeviceDto dto) -> resolveSubmittedAt(dto),
+                Comparator.nullsLast(Comparator.reverseOrder()));
+        Comparator<ApprovalDeviceDto> idComparator = Comparator.comparingLong(
+                dto -> Optional.ofNullable(dto.getApprovalId()).orElse(Long.MAX_VALUE));
+        Comparator<ApprovalDeviceDto> defaultTieBreaker = statusComparator
+                .thenComparing(submissionComparator)
+                .thenComparing(idComparator);
+
+        if ("submittedAt".equals(sortField)) {
+            Comparator<ApprovalDeviceDto> orderedSubmission = desc
+                    ? submissionComparator.reversed()
+                    : submissionComparator;
+            return statusComparator
+                    .thenComparing(orderedSubmission)
+                    .thenComparing(idComparator);
+        }
+
+        Comparator<ApprovalDeviceDto> fieldComparator = switch (sortField) {
+            case "approvalId" -> idComparator;
+            case "deviceId" -> Comparator.comparing(
+                    dto -> defaultString(dto.getDeviceId()),
+                    localeAwareStringComparator());
+            case "deadline" -> Comparator.comparing(
+                    ApprovalDeviceDto::getDeadline,
+                    Comparator.nullsLast(Comparator.naturalOrder()));
+            case "type" -> Comparator.comparing(
+                    dto -> defaultString(dto.getType()),
+                    localeAwareStringComparator());
+            case "approvalStatus" -> Comparator.comparingInt(dto -> statusPriority(dto.getApprovalStatus()));
+            default -> submissionComparator;
         };
 
-        return desc ? comparator.reversed() : comparator;
+        if (desc) {
+            fieldComparator = fieldComparator.reversed();
+        }
+
+        return fieldComparator.thenComparing(defaultTieBreaker);
     }
 
     private String normalizeSortField(String raw) {
         if (raw == null || raw.isBlank()) {
-            return "deadline";
+            return "submittedAt";
         }
         return switch (raw) {
             case "approvalId", "신청번호" -> "approvalId";
             case "deviceId", "관리번호" -> "deviceId";
             case "deadline", "마감일" -> "deadline";
-            default -> "deadline";
+            case "createdDate", "submittedAt", "등록일", "접수일" -> "submittedAt";
+            case "type", "구분" -> "type";
+            case "approvalStatus", "status", "상태" -> "approvalStatus";
+            default -> "submittedAt";
         };
     }
 
@@ -399,8 +430,33 @@ public class ApprovalDeviceService {
         return value.toLowerCase(Locale.ROOT).contains(keyword);
     }
 
+    private int statusPriority(ApprovalStatus status) {
+        if (status == null) {
+            return 5;
+        }
+        return switch (status) {
+            case PENDING, IN_PROGRESS -> 0;
+            case APPROVED -> 1;
+            case REJECTED, CANCELLED -> 2;
+        };
+    }
+
+    private LocalDateTime resolveSubmittedAt(ApprovalDeviceDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        return Optional.ofNullable(dto.getSubmittedAt())
+                .orElse(dto.getCreatedDate());
+    }
+
     private String defaultString(String value) {
         return value == null ? "" : value;
+    }
+
+    private Comparator<String> localeAwareStringComparator() {
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+        return (left, right) -> collator.compare(left, right);
     }
 
     @Transactional(readOnly = true)
@@ -442,13 +498,89 @@ public class ApprovalDeviceService {
             device.setStatus(request.getStatus());
         }
 
-    String fallbackUsername = requester != null ? requester.getUsername() : request.getUserName();
-    String realUser = Optional.ofNullable(request.getRealUser())
-        .filter(name -> !name.isBlank())
-        .orElse(fallbackUsername);
-        device.setRealUser(realUser);
+        String requestedRealUser = Optional.ofNullable(request.getRealUser())
+                .map(String::trim)
+                .orElse(null);
+        if (requestedRealUser != null) {
+            device.setRealUser(requestedRealUser.isEmpty() ? null : requestedRealUser);
+        }
 
         devicesRepository.save(device);
+    }
+
+    private void applyDeviceStateOnCompletion(ApprovalRequest approval) {
+        if (approval == null || !(approval.getDetail() instanceof DeviceApprovalDetail detail)) {
+            return;
+        }
+
+        Devices device = detail.getDevice();
+        DeviceApprovalAction action = detail.getAction();
+        if (device == null || action == null) {
+            return;
+        }
+
+        switch (action) {
+            case RENTAL -> applyRentalCompletion(device, approval, detail);
+            case RETURN -> applyReturnCompletion(device, detail);
+            default -> {
+                // fall through to apply requested attributes below
+            }
+        }
+
+        applyRequestedAttributes(device, detail);
+        devicesRepository.save(device);
+    }
+
+    private void applyRentalCompletion(Devices device,
+                                       ApprovalRequest approval,
+                                       DeviceApprovalDetail detail) {
+        device.setIsUsable(Boolean.FALSE);
+
+        Users owner = approval.getRequester();
+        device.setUserId(owner);
+
+        UUID resolvedUuid = Optional.ofNullable(approval.getRequesterExternalId())
+                .orElseGet(() -> Optional.ofNullable(owner)
+                        .map(Users::getExternalId)
+                        .orElse(null));
+
+        if (resolvedUuid == null) {
+            String fallbackUsername = Optional.ofNullable(owner)
+                    .map(Users::getUsername)
+                    .orElse(approval.getRequesterName());
+            resolvedUuid = Optional.ofNullable(fallbackUsername)
+                    .filter(name -> !name.isBlank())
+                    .flatMap(commonLookupService::resolveKeycloakUserIdByUsername)
+                    .map(this::safeUuid)
+                    .orElse(null);
+        }
+
+        device.setUserUuid(resolvedUuid);
+    }
+
+    private void applyReturnCompletion(Devices device, DeviceApprovalDetail detail) {
+        device.setIsUsable(Boolean.TRUE);
+        device.setUserId(null);
+        device.setUserUuid(null);
+        device.setRealUser(null);
+    }
+
+    private void applyRequestedAttributes(Devices device, DeviceApprovalDetail detail) {
+        if (detail.getRequestedStatus() != null && !detail.getRequestedStatus().isBlank()) {
+            device.setStatus(detail.getRequestedStatus());
+        }
+        if (detail.getRequestedPurpose() != null && !detail.getRequestedPurpose().isBlank()) {
+            device.setPurpose(detail.getRequestedPurpose());
+        }
+        if (detail.getRequestedProject() != null) {
+            device.setProjectId(detail.getRequestedProject());
+        }
+        if (detail.getRequestedDepartment() != null) {
+            device.setManageDep(detail.getRequestedDepartment());
+        }
+        if (detail.getRequestedRealUser() != null && !detail.getRequestedRealUser().isBlank()) {
+            device.setRealUser(detail.getRequestedRealUser());
+        }
     }
 
     private void ensurePreviousStepsApproved(ApprovalRequest approval, int currentSequence) {

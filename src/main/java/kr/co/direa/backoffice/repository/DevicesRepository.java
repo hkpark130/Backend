@@ -15,6 +15,18 @@ public interface DevicesRepository extends JpaRepository<Devices, String> {
     @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDetails")
     List<Devices> findAllWithApprovals();
 
+    @Query("SELECT DISTINCT d FROM Devices d "
+        + "LEFT JOIN FETCH d.deviceTags tags "
+        + "LEFT JOIN FETCH tags.tag "
+        + "LEFT JOIN FETCH d.manageDep "
+        + "LEFT JOIN FETCH d.categoryId "
+        + "LEFT JOIN FETCH d.projectId "
+        + "WHERE ((:userUuid IS NOT NULL AND d.userUuid = :userUuid) "
+        + "   OR (:userUuid IS NOT NULL AND d.userId.externalId = :userUuid) "
+        + "   OR (:normalizedUsername IS NOT NULL AND LOWER(d.realUser) = :normalizedUsername))")
+    List<Devices> findAllForUser(@Param("userUuid") java.util.UUID userUuid,
+                 @Param("normalizedUsername") String normalizedUsername);
+
     @Query("SELECT DISTINCT d FROM Devices d LEFT JOIN FETCH d.approvalDetails WHERE d.status <> :status")
     List<Devices> findAllWithApprovalsAndStatusNot(@Param("status") String status);
 
