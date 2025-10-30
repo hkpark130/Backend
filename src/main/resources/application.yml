@@ -33,7 +33,7 @@ spring:
     username: sa
     password: ""
   ldap:
-    password: ENC(WAncVZKBnkwISmBzO6QwmJgmmkkcAoherm9HWwttHmwlx/uRbHmvSw8adPcG9e0X)
+    password: admin
   jpa:
     hibernate:
       ddl-auto: update
@@ -71,9 +71,23 @@ app:
     realm: sso
     admin-client-id: admin-cli
   ldap:
-    user-base: ${APP_LDAP_USER_BASE:ou=Groups}
+    user-base: ${APP_LDAP_USER_BASE:cn=Users}
     login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
     password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
+  approval:
+    default-approvers:
+      - stage: 1
+        label: "1차 승인자"
+        username: "admin"
+        keycloak-id: 6e88f418-7d88-407d-9961-7fcd47c8caa1
+        display-name: "admin"
+        locked: true
+      - stage: 2
+        label: "2차 승인자"
+        username: "디리아"
+        keycloak-id: 83ae25ff-6f4a-4bce-82d9-4a7d4e4143f6
+        display-name: "디리아"
+        locked: true
 
 ---
 jasypt:
@@ -123,15 +137,17 @@ app:
     user-base: ${APP_LDAP_USER_BASE}
     login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
     password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
-
-# --- jasypt 설정 (필요 시 활성화) ---
-# jasypt:
-#   encryptor:
-#     password: ${JASYPT_KEY}
-#
-# app:
-#   keycloak:
-#     url: ENC(....)
-#     realm: ENC(....)
-#     admin-client-id: ENC(....)
-#     admin-client-secret: ENC(....)
+  approval:
+    default-approvers:
+      - stage: 1
+        label: "1차 승인자"
+        username: "신수인"
+        keycloak-id: 4aafc61c-b29e-4981-97ff-f038981ce376
+        display-name: "신수인"
+        locked: true
+      - stage: 2
+        label: "2차 승인자"
+        username: "조고은"
+        keycloak-id: 0550d03d-27ce-43dd-afab-1849650b203c
+        display-name: "조고은"
+        locked: true

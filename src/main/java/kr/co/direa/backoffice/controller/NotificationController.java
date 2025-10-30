@@ -4,6 +4,7 @@ import kr.co.direa.backoffice.dto.NotificationDto;
 import kr.co.direa.backoffice.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,6 +30,14 @@ public class NotificationController {
     // TODO 인증 연동 시: 알림 수신자만 읽음 처리할 수 있도록 권한 검증 필요
     public ResponseEntity<Void> markAsRead(@PathVariable Long notificationId) {
         notificationService.markAsRead(notificationId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/notifications/{notificationId}")
+    // TODO 인증 연동 시: 수신자 본인만 삭제 가능하도록 권한 검증 필요
+    public ResponseEntity<Void> deleteNotification(@PathVariable Long notificationId,
+                                                   @RequestParam(required = false) String receiver) {
+        notificationService.deleteNotification(notificationId, receiver);
         return ResponseEntity.noContent().build();
     }
 }

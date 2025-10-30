@@ -1,8 +1,18 @@
 package kr.co.direa.backoffice.service;
 
+import java.text.Collator;
+import java.time.ZoneId;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,12 +31,14 @@ import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import kr.co.direa.backoffice.domain.enums.StepStatus;
 import kr.co.direa.backoffice.dto.ApprovalDeviceDto;
 import kr.co.direa.backoffice.dto.DeviceApplicationRequestDto;
+import kr.co.direa.backoffice.dto.PageResponse;
 import kr.co.direa.backoffice.repository.ApprovalRequestRepository;
 import kr.co.direa.backoffice.repository.ApprovalStepRepository;
 import kr.co.direa.backoffice.repository.DepartmentsRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository;
 import kr.co.direa.backoffice.repository.ProjectsRepository;
 import kr.co.direa.backoffice.repository.UsersRepository;
+import kr.co.direa.backoffice.vo.ApprovalSearchRequest;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -127,11 +139,16 @@ public class ApprovalDeviceService {
 
         step.markApproved(comment);
 
-        ApprovalStep nextStep = findNextStep(approval, step.getSequence());
+        int currentSequence = step.getSequence();
+        ApprovalStep nextStep = findNextStep(approval, currentSequence);
         if (nextStep != null) {
             nextStep.begin();
             approval.setStatus(ApprovalStatus.IN_PROGRESS);
-            notifyApprover(approval, nextStep, "1차 결재가 완료되어 2차 결재가 필요합니다.");
+            notifyApplicantOnProgress(approval, step);
+            int nextSequence = nextStep.getSequence();
+            String message = (currentSequence > 0 ? currentSequence + "차 결재가 완료되어 " : "결재가 완료되어 ")
+                    + (nextSequence > 0 ? nextSequence + "차 결재가 필요합니다." : "다음 결재가 필요합니다.");
+            notifyApprover(approval, nextStep, message);
         } else {
             approval.markApproved();
             notifyApplicantOnCompletion(approval);
@@ -197,11 +214,193 @@ public class ApprovalDeviceService {
     }
 
     @Transactional(readOnly = true)
-    public List<ApprovalDeviceDto> findPendingApprovals() {
+    public PageResponse<ApprovalDeviceDto> findPendingApprovals(ApprovalSearchRequest request) {
+        List<ApprovalDeviceDto> baseList = loadPendingApprovalDtos();
+
+        Set<String> categorySet = new HashSet<>();
+        Set<String> applicantSet = new HashSet<>();
+        baseList.forEach(dto -> {
+            if (dto.getCategoryName() != null && !dto.getCategoryName().isBlank()) {
+                categorySet.add(dto.getCategoryName());
+            }
+            if (dto.getUserName() != null && !dto.getUserName().isBlank()) {
+                applicantSet.add(dto.getUserName());
+            }
+        });
+
+        String normalizedFilterField = normalizeApprovalFilterField(request.filterField());
+        String normalizedKeyword = normalizeKeyword(request.keyword());
+        String normalizedChip = normalizeChipValue(request.chipValue());
+
+        List<ApprovalDeviceDto> filtered = baseList.stream()
+                .filter(dto -> matchesChip(dto, normalizedFilterField, normalizedChip))
+                .filter(dto -> matchesKeyword(dto, normalizedFilterField, normalizedKeyword))
+                .sorted(buildApprovalComparator(request.sortField(), request.sortOrder()))
+                .collect(Collectors.toList());
+
+        int size = clampSize(request.size());
+        int totalElements = filtered.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / size));
+        int page = clampPage(request.page(), totalPages, totalElements);
+        int fromIndex = Math.min((page - 1) * size, totalElements);
+        int toIndex = Math.min(fromIndex + size, totalElements);
+        List<ApprovalDeviceDto> content = filtered.subList(fromIndex, toIndex);
+
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("categories", categorySet.stream().sorted(collator).toList());
+        metadata.put("applicants", applicantSet.stream().sorted(collator).toList());
+
+        return PageResponse.of(content, page, size, totalElements, totalPages, metadata);
+    }
+
+    private List<ApprovalDeviceDto> loadPendingApprovalDtos() {
+        List<ApprovalStatus> statuses = Arrays.stream(ApprovalStatus.values())
+                .filter(status -> status != ApprovalStatus.DRAFT)
+                .toList();
+
         List<ApprovalRequest> approvals = approvalRequestRepository.findByCategoryAndStatusIn(
                 ApprovalCategory.DEVICE,
-                List.of(ApprovalStatus.PENDING, ApprovalStatus.IN_PROGRESS));
-        return approvals.stream().map(ApprovalDeviceDto::new).toList();
+                statuses);
+
+        approvals.sort(Comparator.comparing(
+                (ApprovalRequest request) -> Optional.ofNullable(request.getSubmittedAt())
+                        .orElse(request.getCreatedDate()),
+                Comparator.nullsLast(Comparator.reverseOrder())));
+
+        return approvals.stream()
+                .map(ApprovalDeviceDto::new)
+                .toList();
+    }
+
+    private String normalizeApprovalFilterField(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "categoryName";
+        }
+        return switch (raw) {
+            case "신청번호", "approvalId" -> "approvalId";
+            case "신청장비", "categoryName" -> "categoryName";
+            case "신청자", "userName" -> "userName";
+            case "신청정보", "approvalInfo" -> "approvalInfo";
+            case "관리번호", "deviceId" -> "deviceId";
+            default -> "categoryName";
+        };
+    }
+
+    private String normalizeKeyword(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        String trimmed = keyword.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeChipValue(String chipValue) {
+        if (chipValue == null) {
+            return null;
+        }
+        String trimmed = chipValue.trim();
+        if (trimmed.isEmpty() || "ALL".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
+    }
+
+    private boolean matchesChip(ApprovalDeviceDto dto, String filterField, String chipValue) {
+        if (chipValue == null) {
+            return true;
+        }
+        return switch (filterField) {
+            case "categoryName" -> chipValue.equals(dto.getCategoryName());
+            case "userName" -> chipValue.equals(dto.getUserName());
+            case "approvalInfo" -> {
+                ApprovalStatus targetStatus = ApprovalStatus.fromDisplayName(chipValue);
+                if (targetStatus != null && dto.getApprovalStatus() != null) {
+                    yield dto.getApprovalStatus() == targetStatus;
+                }
+                yield chipValue.equals(dto.getApprovalInfo());
+            }
+            default -> true;
+        };
+    }
+
+    private boolean matchesKeyword(ApprovalDeviceDto dto, String filterField, String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        String lowerKeyword = keyword.toLowerCase(Locale.ROOT);
+        return switch (filterField) {
+            case "approvalId" -> containsIgnoreCase(String.valueOf(dto.getApprovalId()), lowerKeyword);
+            case "categoryName" -> containsIgnoreCase(dto.getCategoryName(), lowerKeyword);
+            case "userName" -> containsIgnoreCase(dto.getUserName(), lowerKeyword);
+            case "deviceId" -> containsIgnoreCase(dto.getDeviceId(), lowerKeyword);
+            case "approvalInfo" -> {
+                String combined = ((dto.getType() == null ? "" : dto.getType()) + " "
+                        + (dto.getApprovalInfo() == null ? "" : dto.getApprovalInfo())).trim();
+                yield containsIgnoreCase(combined, lowerKeyword);
+            }
+            default -> true;
+        };
+    }
+
+    private Comparator<ApprovalDeviceDto> buildApprovalComparator(String sortFieldRaw, String sortOrderRaw) {
+        String sortField = normalizeSortField(sortFieldRaw);
+        boolean desc = "desc".equalsIgnoreCase(sortOrderRaw);
+
+        Comparator<ApprovalDeviceDto> comparator = switch (sortField) {
+            case "approvalId" -> Comparator.comparingLong(dto -> Optional.ofNullable(dto.getApprovalId()).orElse(Long.MAX_VALUE));
+            case "deviceId" -> Comparator.comparing(dto -> defaultString(dto.getDeviceId()), String.CASE_INSENSITIVE_ORDER);
+            case "deadline" -> Comparator.comparingLong(dto -> dto.getDeadline() == null
+                    ? Long.MAX_VALUE
+                    : dto.getDeadline().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+            default -> Comparator.comparingLong(dto -> dto.getDeadline() == null
+                    ? Long.MAX_VALUE
+                    : dto.getDeadline().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+        };
+
+        return desc ? comparator.reversed() : comparator;
+    }
+
+    private String normalizeSortField(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "deadline";
+        }
+        return switch (raw) {
+            case "approvalId", "신청번호" -> "approvalId";
+            case "deviceId", "관리번호" -> "deviceId";
+            case "deadline", "마감일" -> "deadline";
+            default -> "deadline";
+        };
+    }
+
+    private int clampSize(int size) {
+        if (size <= 0) {
+            return 10;
+        }
+        return Math.min(size, 100);
+    }
+
+    private int clampPage(int page, int totalPages, int totalElements) {
+        if (totalElements == 0) {
+            return 1;
+        }
+        if (page <= 0) {
+            return 1;
+        }
+        return Math.min(page, Math.max(totalPages, 1));
+    }
+
+    private boolean containsIgnoreCase(String value, String keyword) {
+        if (value == null) {
+            return false;
+        }
+        return value.toLowerCase(Locale.ROOT).contains(keyword);
+    }
+
+    private String defaultString(String value) {
+        return value == null ? "" : value;
     }
 
     @Transactional(readOnly = true)
@@ -317,6 +516,20 @@ public class ApprovalDeviceService {
         }
     }
 
+    private void notifyApplicantOnProgress(ApprovalRequest approval, ApprovalStep completedStep) {
+        String targetReceiver = Optional.ofNullable(approval.getRequester())
+                .map(Users::getUsername)
+                .orElse(approval.getRequesterName());
+        if (targetReceiver == null || targetReceiver.isBlank()) {
+            return;
+        }
+        int sequence = completedStep != null ? completedStep.getSequence() : 0;
+        String stepLabel = sequence > 0 ? sequence + "차 결재가 완료되었습니다." : "결재가 진행 중입니다.";
+        String subject = "[장비 결재 진행] " + buildApprovalSubject(approval) + " - " + stepLabel;
+        notificationService.createNotification(targetReceiver, subject,
+                Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
+    }
+
     private String buildApprovalSubject(ApprovalRequest approval) {
         DeviceApprovalDetail detail = approval.getDetail() instanceof DeviceApprovalDetail deviceDetail
                 ? deviceDetail
@@ -334,7 +547,7 @@ public class ApprovalDeviceService {
     }
 
     private String buildApprovalLink(Long approvalId) {
-        return "/approvals/" + approvalId;
+        return "/admin/approvals/" + approvalId;
     }
 
     private String buildTitle(DeviceApprovalAction action, Devices device) {

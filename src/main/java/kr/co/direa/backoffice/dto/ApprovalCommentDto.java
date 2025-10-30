@@ -19,6 +19,7 @@ public class ApprovalCommentDto implements Serializable {
     private String authorExternalId;
     private String content;
     private LocalDateTime createdDate;
+    private LocalDateTime modifiedDate;
 
     public ApprovalCommentDto(ApprovalComment entity) {
         this.id = entity.getId();
@@ -37,5 +38,6 @@ public class ApprovalCommentDto implements Serializable {
         }
         this.content = entity.getContent();
         this.createdDate = entity.getCreatedDate();
+        this.modifiedDate = entity.getModifiedDate();
     }
 }

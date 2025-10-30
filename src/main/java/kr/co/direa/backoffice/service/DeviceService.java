@@ -1,15 +1,22 @@
 package kr.co.direa.backoffice.service;
 
+import java.text.Collator;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.function.Function;
 
 import kr.co.direa.backoffice.constant.Constants;
 import kr.co.direa.backoffice.domain.ApprovalRequest;
@@ -21,9 +28,12 @@ import kr.co.direa.backoffice.domain.enums.ApprovalCategory;
 import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import kr.co.direa.backoffice.dto.DeviceDto;
+import kr.co.direa.backoffice.dto.PageResponse;
 import kr.co.direa.backoffice.repository.ApprovalRequestRepository;
 import kr.co.direa.backoffice.repository.DeviceApprovalDetailRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository;
+import kr.co.direa.backoffice.vo.AdminDeviceSearchRequest;
+import kr.co.direa.backoffice.vo.DeviceSearchRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,7 +88,55 @@ public class DeviceService {
         }
     }
 
-    public List<DeviceDto> findAvailableDevices() {
+    @Transactional(readOnly = true)
+    public PageResponse<DeviceDto> findAvailableDevices(DeviceSearchRequest request) {
+        List<DeviceDto> baseList = loadAvailableDeviceDtos();
+
+        Set<String> categorySet = new HashSet<>();
+        Set<String> purposeSet = new HashSet<>();
+        Map<String, Long> categoryCountMap = new HashMap<>();
+        Map<String, Long> purposeCountMap = new HashMap<>();
+        baseList.forEach(dto -> {
+            if (dto.getCategoryName() != null && !dto.getCategoryName().isBlank()) {
+                categorySet.add(dto.getCategoryName());
+                categoryCountMap.merge(dto.getCategoryName(), 1L, Long::sum);
+            }
+            if (dto.getPurpose() != null && !dto.getPurpose().isBlank()) {
+                purposeSet.add(dto.getPurpose());
+                purposeCountMap.merge(dto.getPurpose(), 1L, Long::sum);
+            }
+        });
+
+        String filterField = normalizeDeviceFilterField(request.filterField());
+        String keyword = normalizeKeyword(request.keyword());
+        String chip = normalizeChipValue(request.chipValue());
+
+        List<DeviceDto> filtered = baseList.stream()
+                .filter(dto -> matchesDeviceChip(dto, filterField, chip))
+                .filter(dto -> matchesDeviceKeyword(dto, filterField, keyword))
+                .collect(Collectors.toList());
+
+        int size = clampSize(request.size());
+        int totalElements = filtered.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / size));
+        int page = clampPage(request.page(), totalPages, totalElements);
+        int fromIndex = Math.min((page - 1) * size, totalElements);
+        int toIndex = Math.min(fromIndex + size, totalElements);
+        List<DeviceDto> content = filtered.subList(fromIndex, toIndex);
+
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("categories", categorySet.stream().sorted(collator).toList());
+        metadata.put("purposes", purposeSet.stream().sorted(collator).toList());
+        metadata.put("categoryCounts", categoryCountMap);
+        metadata.put("purposeCounts", purposeCountMap);
+
+        return PageResponse.of(content, page, size, totalElements, totalPages, metadata);
+    }
+
+    private List<DeviceDto> loadAvailableDeviceDtos() {
         List<Devices> devices = devicesRepository.findAllWithApprovals();
         return devices.stream()
                 .filter(this::isDeviceAvailable)
@@ -86,19 +144,360 @@ public class DeviceService {
                 .toList();
     }
 
-    public List<DeviceDto> findAllDevicesForAdmin() {
-        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatusNot(Constants.DISPOSE_TYPE);
-        return devices.stream()
-                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
-                .toList();
+    private String normalizeDeviceFilterField(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "all";
+        }
+        return switch (raw) {
+            case "categoryName", "품목" -> "categoryName";
+            case "id", "관리번호" -> "id";
+            case "purpose", "용도" -> "purpose";
+            case "tags", "태그" -> "tags";
+            case "all", "전체" -> "all";
+            default -> "all";
+        };
     }
 
-    public List<DeviceDto> findDisposedDevicesForAdmin() {
-        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatus(Constants.DISPOSE_TYPE);
-        return devices.stream()
+    private String normalizeKeyword(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        String trimmed = keyword.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeChipValue(String chipValue) {
+        if (chipValue == null) {
+            return null;
+        }
+        String trimmed = chipValue.trim();
+        if (trimmed.isEmpty() || "ALL".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
+    }
+
+    private boolean matchesDeviceChip(DeviceDto dto, String filterField, String chipValue) {
+        if (chipValue == null) {
+            return true;
+        }
+        return switch (filterField) {
+            case "categoryName" -> chipValue.equals(dto.getCategoryName());
+            case "purpose" -> chipValue.equals(dto.getPurpose());
+            default -> true;
+        };
+    }
+
+    private boolean matchesDeviceKeyword(DeviceDto dto, String filterField, String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        String lowerKeyword = keyword.toLowerCase(Locale.ROOT);
+        switch (filterField) {
+            case "all":
+                if (containsIgnoreCase(dto.getCategoryName(), lowerKeyword)) {
+                    return true;
+                }
+                if (containsIgnoreCase(dto.getId(), lowerKeyword)) {
+                    return true;
+                }
+                if (containsIgnoreCase(dto.getPurpose(), lowerKeyword)) {
+                    return true;
+                }
+                if (containsIgnoreCase(dto.getDescription(), lowerKeyword)) {
+                    return true;
+                }
+                if (dto.getTags() != null) {
+                    for (String tag : dto.getTags()) {
+                        if (containsIgnoreCase(tag, lowerKeyword)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            case "tags":
+                if (dto.getTags() == null) {
+                    return false;
+                }
+                for (String tag : dto.getTags()) {
+                    if (containsIgnoreCase(tag, lowerKeyword)) {
+                        return true;
+                    }
+                }
+                return false;
+            case "categoryName":
+                return containsIgnoreCase(dto.getCategoryName(), lowerKeyword);
+            case "id":
+                return containsIgnoreCase(dto.getId(), lowerKeyword);
+            case "purpose":
+                return containsIgnoreCase(dto.getPurpose(), lowerKeyword);
+            default:
+                return true;
+        }
+    }
+
+    private int clampSize(int size) {
+        if (size <= 0) {
+            return 10;
+        }
+        return Math.min(size, 100);
+    }
+
+    private int clampPage(int page, int totalPages, int totalElements) {
+        if (totalElements == 0) {
+            return 1;
+        }
+        if (page <= 0) {
+            return 1;
+        }
+        return Math.min(page, Math.max(totalPages, 1));
+    }
+
+    private boolean containsIgnoreCase(String value, String keyword) {
+        if (value == null) {
+            return false;
+        }
+        return value.toLowerCase(Locale.ROOT).contains(keyword);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<DeviceDto> findAllDevicesForAdmin(AdminDeviceSearchRequest request) {
+        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatusNot(Constants.DISPOSE_TYPE);
+        List<DeviceDto> baseList = devices.stream()
                 .map(device -> new DeviceDto(device, buildHistory(device.getId())))
                 .toList();
+        return buildAdminDevicePage(baseList, request, false);
     }
+
+    @Transactional(readOnly = true)
+    public PageResponse<DeviceDto> findDisposedDevicesForAdmin(AdminDeviceSearchRequest request) {
+        List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatus(Constants.DISPOSE_TYPE);
+        List<DeviceDto> baseList = devices.stream()
+                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
+                .toList();
+        return buildAdminDevicePage(baseList, request, true);
+    }
+
+    private PageResponse<DeviceDto> buildAdminDevicePage(List<DeviceDto> baseList,
+                             AdminDeviceSearchRequest request,
+                             boolean disposedOnly) {
+    AdminDeviceSearchRequest safeRequest = request == null
+        ? new AdminDeviceSearchRequest(1, 10, "categoryName", null, null, "categoryName", "asc")
+        : request;
+
+    String filterField = normalizeAdminFilterField(safeRequest.filterField());
+    String keyword = normalizeKeyword(safeRequest.keyword());
+    String filterValue = normalizeFilterValue(safeRequest.filterValue());
+    String sortField = normalizeAdminSortField(safeRequest.sortField());
+    boolean ascending = !"desc".equalsIgnoreCase(safeRequest.sortDirection());
+
+    List<DeviceDto> filtered = baseList.stream()
+        .filter(dto -> matchesAdminFilterValue(dto, filterField, filterValue))
+        .filter(dto -> matchesAdminKeyword(dto, filterField, keyword))
+        .collect(Collectors.toList());
+
+    Comparator<DeviceDto> comparator = buildAdminComparator(sortField, ascending);
+    filtered.sort(comparator);
+
+    int size = clampSize(safeRequest.size());
+    int totalElements = filtered.size();
+    int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / size));
+    int page = clampPage(safeRequest.page(), totalPages, totalElements);
+    int fromIndex = Math.min((page - 1) * size, totalElements);
+    int toIndex = Math.min(fromIndex + size, totalElements);
+    List<DeviceDto> content = filtered.subList(fromIndex, toIndex);
+
+    Map<String, Object> metadata = buildAdminMetadata(baseList, disposedOnly);
+
+    return PageResponse.of(content, page, size, totalElements, totalPages, metadata);
+    }
+
+    private Map<String, Object> buildAdminMetadata(List<DeviceDto> baseList, boolean disposedOnly) {
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+
+        Map<String, List<String>> filters = new HashMap<>();
+        filters.put("categoryName", collectUniqueValues(baseList, DeviceDto::getCategoryName, collator));
+        filters.put("username", collectUniqueValues(baseList, this::displayUser, collator));
+        filters.put("manageDepName", collectUniqueValues(baseList, DeviceDto::getManageDepName, collator));
+        filters.put("projectName", collectUniqueValues(baseList, DeviceDto::getProjectName, collator));
+        filters.put("purpose", collectUniqueValues(baseList, DeviceDto::getPurpose, collator));
+        filters.put("company", collectUniqueValues(baseList, DeviceDto::getCompany, collator));
+        filters.put("status", collectUniqueValues(baseList, DeviceDto::getStatus, collator));
+        filters.put("id", List.of());
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("filters", filters);
+        Map<String, Long> statusCounts = baseList.stream()
+                .collect(Collectors.groupingBy(dto -> Optional.ofNullable(dto.getStatus()).orElse("UNKNOWN"),
+                        Collectors.counting()));
+        metadata.put("statusCounts", statusCounts);
+        metadata.put("totalRecords", baseList.size());
+        metadata.put("disposedOnly", disposedOnly);
+        metadata.put("pageSizeOptions", List.of(10, 25, 50));
+        return metadata;
+    }
+
+    private List<String> collectUniqueValues(List<DeviceDto> source,
+                                             Function<DeviceDto, String> extractor,
+                                             Collator collator) {
+        if (source == null || source.isEmpty()) {
+            return List.of();
+        }
+        Set<String> unique = new TreeSet<>(collator);
+        for (DeviceDto dto : source) {
+            String value = normalizeForFilter(extractor.apply(dto));
+            if (value != null) {
+                unique.add(value);
+            }
+        }
+        return List.copyOf(unique);
+    }
+
+    private String normalizeForFilter(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeFilterValue(String raw) {
+        return normalizeForFilter(raw);
+    }
+
+    private String normalizeAdminFilterField(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "categoryName";
+        }
+        return switch (raw) {
+            case "categoryName", "품목" -> "categoryName";
+            case "id", "관리번호" -> "id";
+            case "username", "사용자" -> "username";
+            case "status", "상태" -> "status";
+            case "manageDepName", "관리부서" -> "manageDepName";
+            case "projectName", "프로젝트" -> "projectName";
+            case "purpose", "용도" -> "purpose";
+            case "company", "제조사" -> "company";
+            case "model", "모델명" -> "model";
+            case "description", "비고" -> "description";
+            case "purchaseDate", "구입일자" -> "purchaseDate";
+            default -> "categoryName";
+        };
+    }
+
+    private String normalizeAdminSortField(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "categoryName";
+        }
+        return switch (raw) {
+            case "id", "관리번호" -> "id";
+            case "username", "사용자" -> "username";
+            case "status", "상태" -> "status";
+            case "manageDepName", "관리부서" -> "manageDepName";
+            case "projectName", "프로젝트" -> "projectName";
+            case "purpose", "용도" -> "purpose";
+            case "company", "제조사" -> "company";
+            case "model", "모델명" -> "model";
+            case "description", "비고" -> "description";
+            case "purchaseDate", "구입일자" -> "purchaseDate";
+            case "price" -> "price";
+            default -> "categoryName";
+        };
+    }
+
+    private boolean matchesAdminFilterValue(DeviceDto dto, String filterField, String filterValue) {
+        if (filterValue == null || filterValue.isBlank()) {
+            return true;
+        }
+        String target = resolveAdminField(dto, filterField);
+        return filterValue.equals(target);
+    }
+
+    private boolean matchesAdminKeyword(DeviceDto dto, String filterField, String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        String target = resolveAdminField(dto, filterField);
+        if (target == null || target.isBlank()) {
+            return false;
+        }
+        return target.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT));
+    }
+
+    private String resolveAdminField(DeviceDto dto, String field) {
+        if (dto == null) {
+            return null;
+        }
+        return switch (field) {
+            case "id" -> dto.getId();
+            case "username" -> displayUser(dto);
+            case "status" -> dto.getStatus();
+            case "manageDepName" -> dto.getManageDepName();
+            case "projectName" -> dto.getProjectName();
+            case "purpose" -> dto.getPurpose();
+            case "company" -> dto.getCompany();
+            case "model" -> dto.getModel();
+            case "description" -> dto.getDescription();
+            case "purchaseDate" -> dto.getPurchaseDate() != null ? formatPurchaseDate(dto.getPurchaseDate()) : null;
+            default -> dto.getCategoryName();
+        };
+    }
+
+    private String displayUser(DeviceDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        String realUser = normalizeForFilter(dto.getRealUser());
+        if (realUser != null) {
+            return realUser;
+        }
+        String username = normalizeForFilter(dto.getUsername());
+        if (username != null) {
+            return username;
+        }
+        return normalizeForFilter(dto.getUserEmail());
+    }
+
+    private Comparator<DeviceDto> buildAdminComparator(String sortField, boolean ascending) {
+        Collator collator = Collator.getInstance(Locale.KOREAN);
+        collator.setStrength(Collator.PRIMARY);
+
+        Comparator<DeviceDto> comparator;
+        if ("purchaseDate".equals(sortField)) {
+            comparator = Comparator.comparing(dto -> sortableDate(dto.getPurchaseDate()), Comparator.nullsLast(Long::compareTo));
+        } else if ("price".equals(sortField)) {
+            comparator = Comparator.comparing(DeviceDto::getPrice, Comparator.nullsLast(Long::compareTo));
+        } else {
+            comparator = Comparator.comparing(dto -> sortableString(resolveAdminField(dto, sortField)), Comparator.nullsLast(collator));
+        }
+
+        comparator = comparator.thenComparing(dto -> sortableString(dto.getId()), Comparator.nullsLast(collator));
+
+        return ascending ? comparator : comparator.reversed();
+    }
+
+    private String sortableString(String value) {
+        return normalizeForFilter(value);
+    }
+
+    private Long sortableDate(java.util.Date date) {
+        if (date == null) {
+            return null;
+        }
+        return date.getTime();
+    }
+
+    private String formatPurchaseDate(java.util.Date date) {
+        if (date == null) {
+            return null;
+        }
+        return date.toInstant()
+                .atZone(java.time.ZoneId.systemDefault())
+                .toLocalDate()
+                .toString();
+    }
+
 
     public DeviceDto findById(String id) {
         Devices device = devicesRepository.findById(id)

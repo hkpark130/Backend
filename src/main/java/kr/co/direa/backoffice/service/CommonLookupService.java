@@ -129,7 +129,7 @@ public class CommonLookupService {
         }
         if (!isBlank(keycloakAdminUsername) && username.equalsIgnoreCase(keycloakAdminUsername) && !isBlank(keycloakAdminUserId)) {
             return parseUuid(keycloakAdminUserId)
-                    .map(adminId -> new KeycloakUserInfo(adminId, keycloakAdminUsername, null));
+                    .map(adminId -> new KeycloakUserInfo(adminId, keycloakAdminUsername, null, keycloakAdminUsername));
         }
         if (isBlank(keycloakUrl) || isBlank(keycloakRealm) || isBlank(keycloakAdminClientId)) {
             return Optional.empty();
@@ -167,7 +167,49 @@ public class CommonLookupService {
             if (resolvedUsername == null || resolvedUsername.isBlank()) {
                 resolvedUsername = username;
             }
-            return Optional.of(new KeycloakUserInfo(externalId, resolvedUsername, email));
+            String displayName = extractDisplayName(first, resolvedUsername);
+            return Optional.of(new KeycloakUserInfo(externalId, resolvedUsername, email, displayName));
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
+    public Optional<KeycloakUserInfo> resolveKeycloakUserInfoById(UUID userId) {
+        if (userId == null) {
+            return Optional.empty();
+        }
+        if (isBlank(keycloakUrl) || isBlank(keycloakRealm)) {
+            return Optional.empty();
+        }
+        String token = getKeycloakAdminAccessToken().orElse(null);
+        if (token == null) {
+            return Optional.empty();
+        }
+        try {
+            String url = keycloakUrl + "/admin/realms/" + keycloakRealm + "/users/" + userId;
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + token);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate rt = new RestTemplate();
+            ResponseEntity<Map<String,Object>> resp = rt.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    new ParameterizedTypeReference<Map<String,Object>>() {}
+            );
+            Map<String,Object> body = resp.getBody();
+            if (!resp.getStatusCode().is2xxSuccessful() || body == null) {
+                return Optional.empty();
+            }
+
+            UUID externalId = parseUuid(toStringOrNull(body.get("id"))).orElse(userId);
+            String username = toStringOrNull(body.get("username"));
+            String email = toStringOrNull(body.get("email"));
+            String displayName = extractDisplayName(body, username);
+            return Optional.of(new KeycloakUserInfo(externalId, username, email, displayName));
         } catch (Exception ignored) {
             return Optional.empty();
         }
@@ -305,5 +347,52 @@ public class CommonLookupService {
         return str.isBlank() ? null : str;
     }
 
-    public record KeycloakUserInfo(UUID id, String username, String email) {}
+    private String extractDisplayName(Map<String, Object> source, String fallback) {
+        if (source == null) {
+            return fallback;
+        }
+        String lastName = toStringOrNull(source.get("lastName"));
+        String firstName = toStringOrNull(source.get("firstName"));
+        String combined = combineNameParts(lastName, firstName);
+        if (combined != null) {
+            return combined;
+        }
+
+        Object attributes = source.get("attributes");
+        if (attributes instanceof Map<?,?> attrMap) {
+            Object displayAttr = attrMap.get("displayName");
+            String attrValue = extractAttributeValue(displayAttr);
+            if (isNotBlank(attrValue)) {
+                return attrValue;
+            }
+        }
+        return isBlank(fallback) ? null : fallback;
+    }
+
+    private String combineNameParts(String lastName, String firstName) {
+        StringBuilder builder = new StringBuilder();
+        if (isNotBlank(lastName)) {
+            builder.append(lastName);
+        }
+        if (isNotBlank(firstName)) {
+            builder.append(firstName);
+        }
+        return builder.length() > 0 ? builder.toString() : null;
+    }
+
+    private String extractAttributeValue(Object attribute) {
+        if (attribute == null) {
+            return null;
+        }
+        if (attribute instanceof List<?> list && !list.isEmpty()) {
+            return toStringOrNull(list.get(0));
+        }
+        return toStringOrNull(attribute);
+    }
+
+    private boolean isNotBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    public record KeycloakUserInfo(UUID id, String username, String email, String displayName) {}
 }

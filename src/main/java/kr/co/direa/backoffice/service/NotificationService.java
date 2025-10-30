@@ -43,4 +43,24 @@ public class NotificationService {
 					notificationsRepository.save(notification);
 				});
 	}
+
+	@Transactional
+	public void deleteNotification(Long notificationId, String receiver) {
+		if (notificationId == null) {
+			return;
+		}
+		String normalizedReceiver = receiver != null ? receiver.trim() : null;
+		notificationsRepository.findById(notificationId)
+			.ifPresent(notification -> {
+				String storedReceiver = notification.getReceiver() != null
+					? notification.getReceiver().trim()
+					: null;
+				if (normalizedReceiver == null || normalizedReceiver.isBlank() ||
+						(storedReceiver != null && storedReceiver.equalsIgnoreCase(normalizedReceiver))) {
+					notificationsRepository.delete(notification);
+				} else {
+					throw new IllegalStateException("You do not have permission to delete this notification");
+				}
+			});
+	}
 }

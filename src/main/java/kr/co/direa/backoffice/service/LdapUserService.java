@@ -1,7 +1,6 @@
 package kr.co.direa.backoffice.service;
 
 import javax.naming.Name;
-import javax.naming.directory.Attribute;
 import javax.naming.directory.Attributes;
 import javax.naming.directory.BasicAttribute;
 import javax.naming.directory.BasicAttributes;
@@ -9,15 +8,14 @@ import javax.naming.directory.DirContext;
 import javax.naming.directory.ModificationItem;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import kr.co.direa.backoffice.domain.ldap.LdapUser;
 import kr.co.direa.backoffice.dto.ldap.LdapUserCreateRequest;
 import kr.co.direa.backoffice.dto.ldap.LdapUserResponse;
+import kr.co.direa.backoffice.repository.LdapUserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ldap.NameNotFoundException;
-import org.springframework.ldap.core.AttributesMapper;
 import org.springframework.ldap.core.DirContextOperations;
 import org.springframework.ldap.core.LdapTemplate;
-import org.springframework.ldap.query.LdapQuery;
-import org.springframework.ldap.query.LdapQueryBuilder;
 import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.ldap.support.LdapUtils;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
@@ -29,6 +27,7 @@ import org.springframework.http.HttpStatus;
 
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -45,12 +44,13 @@ public class LdapUserService {
 
     private final SecureRandom secureRandom = new SecureRandom();
     private final LdapTemplate ldapTemplate;
+    private final LdapUserRepository ldapUserRepository;
     private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
 
     @Value("${spring.ldap.base:}")
     private String baseDn;
 
-    @Value("${app.ldap.user-base:ou=people}")
+    @Value("${app.ldap.user-base:cn=Users}")
     private String userBase;
 
     @Value("${app.ldap.login-shell:/bin/bash}")
@@ -60,36 +60,23 @@ public class LdapUserService {
     private Integer passwordLength;
 
     public List<LdapUserResponse> fetchUsers() {
-        LdapQueryBuilder builder = LdapQueryBuilder.query();
-        if (StringUtils.hasText(userBase)) {
-            builder = builder.base(userBase);
-        }
-    LdapQuery query = builder.where("objectClass").is("inetOrgPerson");
-        return ldapTemplate.search(query, (AttributesMapper<LdapUserResponse>) attrs -> LdapUserResponse.builder()
-                .cn(getAttribute(attrs, "cn"))
-                .uid(getAttribute(attrs, "uid"))
-                .uidNumber(parseInteger(getAttribute(attrs, "uidNumber")))
-                .mail(getAttribute(attrs, "mail"))
-                .ou(getAttribute(attrs, "ou"))
-                .description(getAttribute(attrs, "description"))
-                .gidNumber(parseInteger(getAttribute(attrs, "gidNumber")))
-                .homeDirectory(getAttribute(attrs, "homeDirectory"))
-                .status(getAttribute(attrs, "employeeType"))
-                .build());
+        return ldapUserRepository.findAll().stream()
+                .map(this::toResponse)
+                .collect(Collectors.toList());
     }
 
     public boolean isCnAvailable(String cn) {
         if (!StringUtils.hasText(cn)) {
             return false;
         }
-        return !existsByAttribute("cn", cn.trim());
+        return ldapUserRepository.findByCn(cn.trim()).isEmpty();
     }
 
     public boolean isUidNumberAvailable(Integer uidNumber) {
         if (uidNumber == null) {
             return false;
         }
-        return !existsByAttribute("uidNumber", String.valueOf(uidNumber));
+    return ldapUserRepository.findByUidNumber(uidNumber).isEmpty();
     }
 
     public void createUser(LdapUserCreateRequest request) {
@@ -126,8 +113,8 @@ public class LdapUserService {
             putAttribute(attrs, "employeeType", request.getStatus());
         }
 
-    BasicAttribute passwordAttr = new BasicAttribute("userPassword");
-    passwordAttr.add(passwordEncoder.encode(passwordSource));
+        BasicAttribute passwordAttr = new BasicAttribute("userPassword");
+        passwordAttr.add(passwordEncoder.encode(passwordSource));
         attrs.put(passwordAttr);
 
         try {
@@ -164,18 +151,6 @@ public class LdapUserService {
             log.error("Failed to delete LDAP user {}", cn, ex);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "LDAP 사용자 삭제에 실패했습니다.", ex);
         }
-    }
-
-    private boolean existsByAttribute(String attribute, String value) {
-        LdapQueryBuilder builder = LdapQueryBuilder.query();
-        if (StringUtils.hasText(userBase)) {
-            builder = builder.base(userBase);
-        }
-    LdapQuery query = builder
-        .where("objectClass").is("inetOrgPerson")
-        .and(attribute).is(value);
-    List<String> results = ldapTemplate.search(query, (AttributesMapper<String>) attrs -> value);
-        return !results.isEmpty();
     }
 
     private void ensureUserExists(Name dn) {
@@ -220,32 +195,6 @@ public class LdapUserService {
         }
     }
 
-    private String getAttribute(Attributes attrs, String key) {
-        Attribute attribute = attrs.get(key);
-        if (attribute == null) {
-            return null;
-        }
-        try {
-            Object value = attribute.get();
-            return value != null ? value.toString() : null;
-        } catch (Exception ex) {
-            log.warn("Failed to read ldap attribute {}", key, ex);
-            return null;
-        }
-    }
-
-    private Integer parseInteger(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ex) {
-            log.debug("Unable to parse integer from [{}]", value, ex);
-            return null;
-        }
-    }
-
     private String generateTemporaryPassword() {
         final String candidates = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%?";
         StringBuilder builder = new StringBuilder(passwordLength != null && passwordLength > 0 ? passwordLength : 12);
@@ -255,5 +204,19 @@ public class LdapUserService {
             builder.append(candidates.charAt(idx));
         }
         return builder.toString();
+    }
+
+    private LdapUserResponse toResponse(LdapUser user) {
+        return LdapUserResponse.builder()
+                .cn(user.getCn())
+                .uid(user.getUid())
+                .uidNumber(user.getUidNumber())
+                .mail(user.getMail())
+                .ou(user.getOu())
+                .description(user.getDescription())
+                .gidNumber(user.getGidNumber())
+                .homeDirectory(user.getHomeDirectory())
+                .status(user.getEmployeeType())
+                .build();
     }
 }

@@ -3,7 +3,10 @@ package kr.co.direa.backoffice.controller;
 import kr.co.direa.backoffice.dto.DeviceDto;
 import kr.co.direa.backoffice.dto.DeviceDisposeRequest;
 import kr.co.direa.backoffice.dto.DeviceRecoveryRequest;
+import kr.co.direa.backoffice.dto.PageResponse;
 import kr.co.direa.backoffice.service.DeviceService;
+import kr.co.direa.backoffice.vo.AdminDeviceSearchRequest;
+import kr.co.direa.backoffice.vo.DeviceSearchRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -24,19 +28,38 @@ public class DeviceController {
 
     @GetMapping("/available-devicelist")
     // TODO 인증 연동 시: 로그인한 사용자만 조회할 수 있도록 Security 설정 추가 필요
-    public ResponseEntity<List<DeviceDto>> getAvailableDevices() {
-        return ResponseEntity.ok(deviceService.findAvailableDevices());
+    public ResponseEntity<PageResponse<DeviceDto>> getAvailableDevices(@RequestParam(defaultValue = "1") int page,
+                                                                       @RequestParam(defaultValue = "10") int size,
+                                                                       @RequestParam(required = false) String filterField,
+                                                                       @RequestParam(required = false) String keyword,
+                                                                       @RequestParam(required = false) String chipValue) {
+        DeviceSearchRequest request = new DeviceSearchRequest(page, size, filterField, keyword, chipValue);
+        return ResponseEntity.ok(deviceService.findAvailableDevices(request));
     }
 
     @GetMapping("/admin/devices")
     // TODO 인증 연동 시: 관리자 권한 확인 후 제공하도록 Security 설정 추가 필요
-    public ResponseEntity<List<DeviceDto>> getAdminDevices() {
-        return ResponseEntity.ok(deviceService.findAllDevicesForAdmin());
+    public ResponseEntity<PageResponse<DeviceDto>> getAdminDevices(@RequestParam(defaultValue = "1") int page,
+                                                                   @RequestParam(defaultValue = "10") int size,
+                                                                   @RequestParam(defaultValue = "categoryName") String filterField,
+                                                                   @RequestParam(required = false) String keyword,
+                                                                   @RequestParam(required = false) String filterValue,
+                                                                   @RequestParam(defaultValue = "categoryName") String sortField,
+                                                                   @RequestParam(defaultValue = "asc") String sortDirection) {
+        AdminDeviceSearchRequest request = new AdminDeviceSearchRequest(page, size, filterField, keyword, filterValue, sortField, sortDirection);
+        return ResponseEntity.ok(deviceService.findAllDevicesForAdmin(request));
     }
 
     @GetMapping("/admin/devices/disposed")
-    public ResponseEntity<List<DeviceDto>> getDisposedDevices() {
-        return ResponseEntity.ok(deviceService.findDisposedDevicesForAdmin());
+    public ResponseEntity<PageResponse<DeviceDto>> getDisposedDevices(@RequestParam(defaultValue = "1") int page,
+                                                                      @RequestParam(defaultValue = "10") int size,
+                                                                      @RequestParam(defaultValue = "categoryName") String filterField,
+                                                                      @RequestParam(required = false) String keyword,
+                                                                      @RequestParam(required = false) String filterValue,
+                                                                      @RequestParam(defaultValue = "categoryName") String sortField,
+                                                                      @RequestParam(defaultValue = "asc") String sortDirection) {
+        AdminDeviceSearchRequest request = new AdminDeviceSearchRequest(page, size, filterField, keyword, filterValue, sortField, sortDirection);
+        return ResponseEntity.ok(deviceService.findDisposedDevicesForAdmin(request));
     }
 
     @GetMapping("/device/{id}")
