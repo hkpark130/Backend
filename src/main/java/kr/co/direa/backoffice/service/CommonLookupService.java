@@ -3,12 +3,11 @@ package kr.co.direa.backoffice.service;
 import kr.co.direa.backoffice.domain.Categories;
 import kr.co.direa.backoffice.domain.Departments;
 import kr.co.direa.backoffice.domain.Projects;
-import kr.co.direa.backoffice.domain.Users;
 import kr.co.direa.backoffice.repository.CategoriesRepository;
 import kr.co.direa.backoffice.repository.DepartmentsRepository;
 import kr.co.direa.backoffice.repository.ProjectsRepository;
-import kr.co.direa.backoffice.repository.UsersRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -23,8 +22,6 @@ import java.util.Optional;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 
 /**
  * 공통 조회/유틸 모음 서비스.
@@ -33,11 +30,11 @@ import java.nio.charset.StandardCharsets;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CommonLookupService {
     private final CategoriesRepository categoriesRepository;
     private final DepartmentsRepository departmentsRepository;
     private final ProjectsRepository projectsRepository;
-    private final UsersRepository usersRepository;
 
     @Value("${app.keycloak.url:}")
     private String keycloakUrl;
@@ -71,11 +68,6 @@ public class CommonLookupService {
         return Optional.ofNullable(projectsRepository.findByName(name));
     }
 
-    public Optional<Users> findUserByUsername(String username) {
-        if (username == null || username.isBlank()) return Optional.empty();
-        return usersRepository.findByUsername(username);
-    }
-
     /**
      * JWT(인증된 요청)에서 현재 사용자의 Keycloak UUID(sub) 추출
      */
@@ -94,6 +86,36 @@ public class CommonLookupService {
         if (auth == null) return Optional.empty();
         Object principal = auth.getPrincipal();
         return extractClaimSafely(principal, "preferred_username");
+    }
+
+    public Optional<String> currentUserEmailFromJwt() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) {
+            return Optional.empty();
+        }
+        Object principal = auth.getPrincipal();
+        return extractClaimSafely(principal, "email");
+    }
+
+    public Optional<String> currentUserDisplayNameFromJwt() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) {
+            return Optional.empty();
+        }
+        Object principal = auth.getPrincipal();
+        Optional<String> directName = extractClaimSafely(principal, "name");
+        if (directName.isPresent()) {
+            return directName;
+        }
+        Optional<String> given = extractClaimSafely(principal, "given_name");
+        Optional<String> family = extractClaimSafely(principal, "family_name");
+        if (given.isPresent() || family.isPresent()) {
+            String combined = combineNameParts(family.orElse(null), given.orElse(null));
+            if (combined != null) {
+                return Optional.of(combined);
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<String> extractClaimSafely(Object principal, String claimName) {
@@ -127,7 +149,9 @@ public class CommonLookupService {
         if (username == null || username.isBlank()) {
             return Optional.empty();
         }
-        if (!isBlank(keycloakAdminUsername) && username.equalsIgnoreCase(keycloakAdminUsername) && !isBlank(keycloakAdminUserId)) {
+    if (!isBlank(keycloakAdminUsername)
+        && username.equalsIgnoreCase(keycloakAdminUsername)
+        && !isBlank(keycloakAdminUserId)) {
             return parseUuid(keycloakAdminUserId)
                     .map(adminId -> new KeycloakUserInfo(adminId, keycloakAdminUsername, null, keycloakAdminUsername));
         }
@@ -140,8 +164,7 @@ public class CommonLookupService {
                 return Optional.empty();
             }
 
-            String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
-            String url = keycloakUrl + "/admin/realms/" + keycloakRealm + "/users?username=" + encoded + "&exact=true";
+            String url = keycloakUrl + "/admin/realms/" + keycloakRealm + "/users?username=" + username + "&exact=true";
 
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Bearer " + token);
@@ -155,6 +178,7 @@ public class CommonLookupService {
                     entity,
                     new ParameterizedTypeReference<List<Map<String,Object>>>() {}
             );
+            log.info("status={}, headers={}, body={}", resp.getStatusCode(), resp.getHeaders(), resp.getBody());
             List<Map<String,Object>> body = resp.getBody();
             if (!resp.getStatusCode().is2xxSuccessful() || body == null || body.isEmpty()) {
                 return Optional.empty();
@@ -172,6 +196,17 @@ public class CommonLookupService {
         } catch (Exception ignored) {
             return Optional.empty();
         }
+    }
+
+    public KeycloakUserInfo fallbackUserInfo(String username) {
+        if (username == null) {
+            return null;
+        }
+        String trimmed = username.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        return new KeycloakUserInfo(null, trimmed, null, trimmed);
     }
 
     public Optional<KeycloakUserInfo> resolveKeycloakUserInfoById(UUID userId) {
@@ -251,9 +286,6 @@ public class CommonLookupService {
             if (usingPasswordGrant) {
                 form.add("grant_type", "password");
                 form.add("client_id", keycloakAdminClientId);
-                if (!isBlank(keycloakAdminClientSecret)) {
-                    form.add("client_secret", keycloakAdminClientSecret);
-                }
                 form.add("username", keycloakAdminUsername);
                 form.add("password", keycloakAdminPassword);
             } else {

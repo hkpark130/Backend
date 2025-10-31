@@ -24,7 +24,6 @@ import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
-import kr.co.direa.backoffice.domain.Users;
 import kr.co.direa.backoffice.domain.enums.ApprovalCategory;
 import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
@@ -82,9 +81,7 @@ public class DeviceService {
                             device.setUserUuid(UUID.fromString(uuidStr));
                         } catch (IllegalArgumentException ignored) {}
                     });
-            // (선택) 기존 Users 연관 유지가 필요하면 아래 주석 해제
-            // commonLookupService.findUserByUsername(dto.getUsername())
-            //         .ifPresent(device::setUserId);
+            device.setRealUser(dto.getRealUser());
             devicesRepository.save(device);
         }
     }
@@ -139,10 +136,17 @@ public class DeviceService {
 
     private List<DeviceDto> loadAvailableDeviceDtos() {
         List<Devices> devices = devicesRepository.findAllWithApprovals();
-        return devices.stream()
-                .filter(this::isDeviceAvailable)
-                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
-                .toList();
+    return devices.stream()
+        .filter(this::isDeviceAvailable)
+        .map(this::toDeviceDto)
+        .toList();
+    }
+
+    private DeviceDto toDeviceDto(Devices device) {
+        if (device == null) {
+            return null;
+        }
+        return new DeviceDto(device, buildHistory(device.getId()));
     }
 
     private String normalizeDeviceFilterField(String raw) {
@@ -272,18 +276,18 @@ public class DeviceService {
     @Transactional(readOnly = true)
     public PageResponse<DeviceDto> findAllDevicesForAdmin(AdminDeviceSearchRequest request) {
         List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatusNot(Constants.DISPOSE_TYPE);
-        List<DeviceDto> baseList = devices.stream()
-                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
-                .toList();
+    List<DeviceDto> baseList = devices.stream()
+        .map(this::toDeviceDto)
+        .toList();
         return buildAdminDevicePage(baseList, request, false);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<DeviceDto> findDisposedDevicesForAdmin(AdminDeviceSearchRequest request) {
         List<Devices> devices = devicesRepository.findAllWithApprovalsAndStatus(Constants.DISPOSE_TYPE);
-        List<DeviceDto> baseList = devices.stream()
-                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
-                .toList();
+    List<DeviceDto> baseList = devices.stream()
+        .map(this::toDeviceDto)
+        .toList();
         return buildAdminDevicePage(baseList, request, true);
     }
 
@@ -514,21 +518,25 @@ public class DeviceService {
                 .flatMap(this::parseUuidSafely)
                 .orElse(null);
 
-        String normalizedUsername = commonLookupService.currentUsernameFromJwt()
-                .map(this::normalizeKeyword)
-                .orElse(null);
-        String usernameKey = normalizedUsername != null ? normalizeUsernameKey(normalizedUsername) : null;
+        Set<String> usernameKeys = resolveCurrentUserKeys();
 
-        if (userUuid == null && usernameKey == null) {
+        if (userUuid == null && usernameKeys.isEmpty()) {
             return List.of();
         }
 
-        List<Devices> rawDevices = devicesRepository.findAllForUser(userUuid, usernameKey);
-        if (rawDevices.isEmpty()) {
-            return List.of();
+        Set<Devices> uniqueDevices = new LinkedHashSet<>();
+        if (userUuid != null) {
+            uniqueDevices.addAll(devicesRepository.findAllForUser(userUuid, null));
+        }
+        if (!usernameKeys.isEmpty()) {
+            for (String key : usernameKeys) {
+                uniqueDevices.addAll(devicesRepository.findAllForUser(null, key));
+            }
         }
 
-        LinkedHashSet<Devices> uniqueDevices = new LinkedHashSet<>(rawDevices);
+        if (uniqueDevices.isEmpty()) {
+            return List.of();
+        }
         Collator collator = Collator.getInstance(Locale.KOREAN);
         collator.setStrength(Collator.PRIMARY);
 
@@ -538,8 +546,8 @@ public class DeviceService {
 
         return uniqueDevices.stream()
                 .filter(device -> device.getStatus() == null || !Constants.DISPOSE_TYPE.equals(device.getStatus()))
-                .filter(device -> ownsDevice(device, usernameKey, userUuid))
-                .map(device -> new DeviceDto(device, buildHistory(device.getId())))
+                .filter(device -> ownsDevice(device, usernameKeys, userUuid))
+        .map(this::toDeviceDto)
                 .sorted(comparator)
                 .toList();
     }
@@ -553,7 +561,7 @@ public class DeviceService {
                 .map(this::normalizeKeyword)
                 .orElse(null);
 
-        String usernameKey = normalizedUsername != null ? normalizeUsernameKey(normalizedUsername) : null;
+        Set<String> usernameKeys = resolveCurrentUserKeys();
 
         UUID effectiveUuid = jwtUserUuid;
         if (effectiveUuid == null && normalizedUsername != null) {
@@ -562,14 +570,14 @@ public class DeviceService {
                     .orElse(null);
         }
 
-        if (effectiveUuid == null && usernameKey == null) {
+        if (effectiveUuid == null && usernameKeys.isEmpty()) {
             throw new IllegalArgumentException("인증된 사용자 정보를 확인할 수 없습니다.");
         }
 
         Devices device = devicesRepository.findById(deviceId)
                 .orElseThrow(() -> new IllegalArgumentException("Device not found: " + deviceId));
 
-        if (!ownsDevice(device, usernameKey, effectiveUuid)) {
+        if (!ownsDevice(device, usernameKeys, effectiveUuid)) {
             throw new IllegalArgumentException("요청한 사용자의 장비가 아닙니다.");
         }
 
@@ -581,11 +589,11 @@ public class DeviceService {
         device.setDescription(normalizedDescription);
         devicesRepository.save(device);
 
-        return new DeviceDto(device, buildHistory(deviceId));
+    return toDeviceDto(device);
     }
 
-    private boolean ownsDevice(Devices device, String normalizedUsernameKey, UUID expectedUserUuid) {
-        if (device == null || (normalizedUsernameKey == null && expectedUserUuid == null)) {
+    private boolean ownsDevice(Devices device, Set<String> normalizedUsernameKeys, UUID expectedUserUuid) {
+        if (device == null || (normalizedUsernameKeys == null && expectedUserUuid == null)) {
             return false;
         }
 
@@ -594,16 +602,60 @@ public class DeviceService {
             if (deviceUuid != null && expectedUserUuid.equals(deviceUuid)) {
                 return true;
             }
-            UUID externalId = Optional.ofNullable(device.getUserId())
-                    .map(Users::getExternalId)
-                    .orElse(null);
-            if (externalId != null && expectedUserUuid.equals(externalId)) {
+        }
+
+        if (normalizedUsernameKeys == null || normalizedUsernameKeys.isEmpty()) {
+            return false;
+        }
+
+        String realUserKey = normalizeUsernameKey(device.getRealUser());
+        if (realUserKey != null) {
+            if (normalizedUsernameKeys.contains(realUserKey)) {
                 return true;
+            }
+            String withoutSpaces = realUserKey.replace(" ", "");
+            if (!withoutSpaces.isBlank() && normalizedUsernameKeys.contains(withoutSpaces)) {
+                return true;
+            }
+            int atIndex = realUserKey.indexOf('@');
+            if (atIndex > 0) {
+                String localPart = realUserKey.substring(0, atIndex);
+                if (!localPart.isBlank() && normalizedUsernameKeys.contains(localPart)) {
+                    return true;
+                }
             }
         }
 
-    String realUserKey = normalizeUsernameKey(device.getRealUser());
-    return normalizedUsernameKey != null && normalizedUsernameKey.equals(realUserKey);
+        return false;
+    }
+
+    private Set<String> resolveCurrentUserKeys() {
+        Set<String> keys = new LinkedHashSet<>();
+        commonLookupService.currentUsernameFromJwt().ifPresent(value -> addUsernameCandidate(keys, value));
+        commonLookupService.currentUserEmailFromJwt().ifPresent(value -> addUsernameCandidate(keys, value));
+        commonLookupService.currentUserDisplayNameFromJwt().ifPresent(value -> addUsernameCandidate(keys, value));
+        return keys;
+    }
+
+    private void addUsernameCandidate(Set<String> collector, String rawCandidate) {
+        String normalized = normalizeUsernameKey(rawCandidate);
+        if (normalized == null || normalized.isBlank()) {
+            return;
+        }
+        collector.add(normalized);
+        int atIndex = normalized.indexOf('@');
+        if (atIndex > 0) {
+            String localPart = normalized.substring(0, atIndex);
+            if (!localPart.isBlank()) {
+                collector.add(localPart);
+            }
+        }
+        if (normalized.indexOf(' ') >= 0) {
+            String withoutSpaces = normalized.replace(" ", "");
+            if (!withoutSpaces.isBlank()) {
+                collector.add(withoutSpaces);
+            }
+        }
     }
 
     private Optional<UUID> parseUuidSafely(String source) {
@@ -621,7 +673,7 @@ public class DeviceService {
     public DeviceDto findById(String id) {
         Devices device = devicesRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Device not found: " + id));
-        return new DeviceDto(device, buildHistory(id));
+    return toDeviceDto(device);
     }
 
     @Transactional
@@ -648,11 +700,10 @@ public class DeviceService {
             }
         });
 
-        device.setStatus(Constants.DISPOSE_TYPE);
-        device.setIsUsable(Boolean.FALSE);
-        device.setUserId(null);
-        device.setRealUser(null);
-        device.setUserUuid(null);
+    device.setStatus(Constants.DISPOSE_TYPE);
+    device.setIsUsable(Boolean.FALSE);
+    device.setRealUser(null);
+    device.setUserUuid(null);
         devicesRepository.save(device);
 
         ApprovalRequest disposalRequest = ApprovalRequest.builder()
@@ -750,11 +801,17 @@ public class DeviceService {
         );
 
         // 사용자 정보 및 실사용자 반영
-        device.setRealUser(dto.getRealUser());
-        commonLookupService.findUserByUsername(dto.getUsername()).ifPresent(device::setUserId);
-        commonLookupService.resolveKeycloakUserIdByUsername(dto.getUsername()).ifPresent(uuidStr -> {
-            try { device.setUserUuid(java.util.UUID.fromString(uuidStr)); } catch (IllegalArgumentException ignore) {}
-        });
+    device.setRealUser(dto.getRealUser());
+        var keycloakUser = commonLookupService.resolveKeycloakUserInfoByUsername(dto.getUsername())
+                .orElseGet(() -> commonLookupService.fallbackUserInfo(dto.getUsername()));
+        if (keycloakUser != null) {
+            device.setUserUuid(keycloakUser.id());
+            if (device.getRealUser() == null || device.getRealUser().isBlank()) {
+                device.setRealUser(safeDisplayName(keycloakUser));
+            }
+        } else {
+            device.setUserUuid(null);
+        }
 
         devicesRepository.save(device);
         return new DeviceDto(device, buildHistory(id));
@@ -794,14 +851,7 @@ public class DeviceService {
             Map<String, Object> map = new HashMap<>();
             ApprovalRequest request = detail.getRequest();
 
-            Optional<String> requesterName = Optional.ofNullable(request)
-                    .map(ApprovalRequest::getRequesterName)
-                    .filter(name -> name != null && !name.isBlank());
-            if (requesterName.isEmpty()) {
-                requesterName = Optional.ofNullable(request)
-                        .map(ApprovalRequest::getRequester)
-                        .map(Users::getUsername);
-            }
+        Optional<String> requesterName = resolveRequesterDisplayName(request);
 
             Optional<String> operatorFromReason = extractOperatorFromReason(
                     Optional.ofNullable(request).map(ApprovalRequest::getReason).orElse(null));
@@ -820,6 +870,16 @@ public class DeviceService {
             historyList.add(map);
         }
         return historyList;
+    }
+
+    private String safeDisplayName(CommonLookupService.KeycloakUserInfo userInfo) {
+        if (userInfo == null) {
+            return null;
+        }
+        if (userInfo.displayName() != null && !userInfo.displayName().isBlank()) {
+            return userInfo.displayName();
+        }
+        return userInfo.username();
     }
 
     private String buildOperatorTaggedReason(String baseReason, String operatorUsername) {
@@ -853,6 +913,27 @@ public class DeviceService {
             commonLookupService.resolveKeycloakUserIdByUsername(operatorUsername)
                     .orElseThrow(() -> new IllegalArgumentException("Keycloak user not found: " + operatorUsername));
         }
+    }
+
+    private Optional<String> resolveRequesterDisplayName(ApprovalRequest request) {
+        if (request == null) {
+            return Optional.empty();
+        }
+        String requesterName = request.getRequesterName();
+        if (requesterName != null && !requesterName.isBlank()) {
+            return Optional.of(requesterName);
+        }
+        UUID externalId = request.getRequesterExternalId();
+        if (externalId != null) {
+            return commonLookupService.resolveKeycloakUserInfoById(externalId)
+                    .map(this::safeDisplayName)
+                    .filter(name -> name != null && !name.isBlank());
+        }
+        String requesterEmail = request.getRequesterEmail();
+        if (requesterEmail != null && !requesterEmail.isBlank()) {
+            return Optional.of(requesterEmail);
+        }
+        return Optional.empty();
     }
 
     private Optional<String> extractOperatorFromReason(String reason) {

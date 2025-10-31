@@ -14,8 +14,6 @@ public interface ApprovalStepRepository extends JpaRepository<ApprovalStep, Long
 
     List<ApprovalStep> findByRequestId(Long requestId);
 
-    Optional<ApprovalStep> findByRequestIdAndApproverId(Long requestId, Long approverId);
-
     Optional<ApprovalStep> findByRequestIdAndApproverExternalId(Long requestId, UUID approverExternalId);
 
     Optional<ApprovalStep> findByRequestIdAndApproverName(Long requestId, String approverName);

@@ -1,24 +1,24 @@
 package kr.co.direa.backoffice.dto;
 
-import java.io.Serializable;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
-
 import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.ApprovalStep;
 import kr.co.direa.backoffice.domain.Departments;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
-import kr.co.direa.backoffice.domain.Users;
 import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+
+import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -27,8 +27,8 @@ public class ApprovalDeviceDto implements Serializable {
     private String approvalInfo;
     private ApprovalStatus approvalStatus;
     private Long approvalId;
-    private Long userId;
     private String userName;
+    private UUID userUuid;
     private String realUser;
     private String reason;
     private String deviceId;
@@ -53,9 +53,8 @@ public class ApprovalDeviceDto implements Serializable {
         this.approvalId = request.getId();
         this.approvalStatus = request.getStatus();
         this.approvalInfo = resolveApprovalInfo(request);
-        Users requester = request.getRequester();
-        this.userId = Optional.ofNullable(requester).map(Users::getId).orElse(null);
-        this.userName = Optional.ofNullable(requester).map(Users::getUsername).orElse(request.getRequesterName());
+        this.userName = Optional.ofNullable(request.getRequesterName()).orElse(null);
+        this.userUuid = request.getRequesterExternalId();
         this.reason = request.getReason();
         this.submittedAt = request.getSubmittedAt();
         this.createdDate = Optional.ofNullable(request.getSubmittedAt()).orElse(request.getCreatedDate());
@@ -110,12 +109,12 @@ public class ApprovalDeviceDto implements Serializable {
             return null;
         }
         if (status == ApprovalStatus.IN_PROGRESS) {
-        List<ApprovalStep> steps = request.getSteps();
-        long approvedCount = steps == null
-            ? 0
-            : steps.stream()
-                .filter(ApprovalStep::isApproved)
-                .count();
+            List<ApprovalStep> steps = request.getSteps();
+            long approvedCount = steps == null
+                    ? 0
+                    : steps.stream()
+                            .filter(ApprovalStep::isApproved)
+                            .count();
             if (approvedCount > 0) {
                 return approvedCount + "차승인완료";
             }

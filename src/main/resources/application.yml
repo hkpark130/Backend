@@ -14,12 +14,11 @@ jasypt:
     password: mySecretKey
 
 constants:
-  keycloak-url: ENC(6UeJ0QC/B9zHz+T/wXKKWgXJ5/FYBK7xF/dWVCpNweN14MZNdJ9fXbDYax1nBwyWg8X1huwRtyE5IhPrn9V7SQ==)
-  client-secret: ENC(qSvRXUFAk4C9Xtt/B1jEA0G7+0hvvhg1mdmeTAKTrAAOMrv1kGy3XGTuASCtksADAtj9/EUh3Lo9fEIKZV+hOuZEYOLKTKWYWVXTynEStSg=)
+  keycloak-url: "https://keycloak.direa.synology.me"
+  realm: "sso"
   admin: admin
-  admin-id: admin
+  admin-id: 6e88f418-7d88-407d-9961-7fcd47c8caa1
   admin-pw: keycloak
-  realm: ENC(kbWdaszp7HSheIPFaLRmc0NBJLbEmCrnVWVQmNM7QcX057IeT3I3wDU7ufjNWnCX)
   admin-group-id: ENC(j264nBfm3L46eTho2ivWb6pLBRQ8zUAhru38+ld2p8YxB3aZTJzOWcqbre8NL8ZZvhWlBfNAZ6tt2fLa0YR63YZJU9M7QEsiEMfr6zuCXM8=)
 
 # Local profile: in-memory H2 DB, H2 console enabled, verbose SQL
@@ -42,6 +41,12 @@ spring:
         format_sql: true
     show-sql: true
     defer-datasource-initialization: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${constants.keycloak-url}/realms/${constants.realm}
+          jwk-set-uri: ${constants.keycloak-url}/realms/${constants.realm}/protocol/openid-connect/certs
   h2:
     console:
       enabled: true
@@ -67,7 +72,7 @@ app:
   upload:
     dir: uploads
   keycloak:
-    url: https://keycloak.direa.synology.me/auth
+    url: https://keycloak.direa.synology.me
     realm: sso
     admin-client-id: admin-cli
   ldap:
@@ -96,11 +101,10 @@ jasypt:
 
 constants:
   keycloak-url: "https://keycloak.direa.synology.me"
-  client-secret: ENC(mwGuQuXgOPVZ+upjEIGrt9fJMwuc7omECSvUOtaZr1ylbEqN/x+Jp5eh4tx9qQb9YEhQiOz464nJVmh2jJAvkaLdMnq6uwwmX8NfN+IVAxI=)
+  realm: "sso"
   admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
   admin-id: ENC(RNu0pvdPsdYlgv4rJqH5rvYY55pIddi3gCSyTzutMRqo1DeqeNN+ukCsRIqPYoGd9EXaSxr20rYjHpm+hc+CvfpJ//0TgFjnoe5+JxtqcGY=)
   admin-pw: ENC(9wsj63HOG5z6ursBEi7VzmwGMd/8jH/TyD1IRngtWqDvUvL04TtKPEFQxyIAY0OA)
-  realm: ENC(rW4Ij4d66yAHbzdxzQnWAcPib/iNmYJloRByJHiG0Qqm0bNDbjNzp5LrSdzvL7QG)
   admin-group-id: ENC(WmXJE0dvsIouiJP9uimG+4VciSGhTPusYQ/PCYBMItQwTtK0q5CNYrmdLCkuf5VNk/fTZC4E3TaWGcoAZMtKIVD30J15WSM+83YPygVJv8s=)
 
 # Prod profile: external DB, stricter JPA, no H2 console, minimal logs
@@ -123,6 +127,12 @@ spring:
         format_sql: false
     show-sql: false
     defer-datasource-initialization: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${constants.keycloak-url}/realms/${constants.realm}
+          jwk-set-uri: ${constants.keycloak-url}/realms/${constants.realm}/protocol/openid-connect/certs
 
 app:
   cors:

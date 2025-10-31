@@ -35,10 +35,6 @@ public class ApprovalStep extends BaseTimeEntity {
     @JoinColumn(name = "request_id")
     private ApprovalRequest request;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "approver_id")
-    private Users approver;
-
     @Column(name = "approver_name", length = 100)
     private String approverName;
 
@@ -62,11 +58,7 @@ public class ApprovalStep extends BaseTimeEntity {
     private String comment;
 
     @Builder
-    public ApprovalStep(Users approver, int sequence) {
-        this.approver = approver;
-        this.approverName = approver != null ? approver.getUsername() : null;
-        this.approverEmail = approver != null ? approver.getEmail() : null;
-        this.approverExternalId = approver != null ? approver.getExternalId() : null;
+    public ApprovalStep(int sequence) {
         this.sequence = sequence;
         this.status = StepStatus.PENDING;
     }

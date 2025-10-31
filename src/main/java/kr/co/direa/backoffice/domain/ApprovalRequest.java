@@ -8,17 +8,16 @@ import java.util.UUID;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.EnumType;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -36,10 +35,6 @@ public class ApprovalRequest extends BaseTimeEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "requester_id")
-    private Users requester;
 
     @Column(name = "requester_name", length = 100)
     private String requesterName;
@@ -83,16 +78,11 @@ public class ApprovalRequest extends BaseTimeEntity {
     private ApprovalDetail detail;
 
     @Builder
-    public ApprovalRequest(Users requester,
-                           ApprovalCategory category,
+    public ApprovalRequest(ApprovalCategory category,
                            ApprovalStatus status,
                            String title,
                            String reason,
                            LocalDateTime dueDate) {
-        this.requester = requester;
-        this.requesterName = requester != null ? requester.getUsername() : null;
-        this.requesterEmail = requester != null ? requester.getEmail() : null;
-        this.requesterExternalId = requester != null ? requester.getExternalId() : null;
         this.category = category;
         this.status = status;
         this.title = title;

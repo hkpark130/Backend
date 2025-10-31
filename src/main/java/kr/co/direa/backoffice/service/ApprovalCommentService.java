@@ -13,11 +13,9 @@ import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.ApprovalStep;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
-import kr.co.direa.backoffice.domain.Users;
 import kr.co.direa.backoffice.dto.ApprovalCommentDto;
 import kr.co.direa.backoffice.repository.ApprovalCommentRepository;
 import kr.co.direa.backoffice.repository.ApprovalRequestRepository;
-import kr.co.direa.backoffice.repository.UsersRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class ApprovalCommentService {
 	private final ApprovalCommentRepository approvalCommentRepository;
 	private final ApprovalRequestRepository approvalRequestRepository;
-	private final UsersRepository usersRepository;
 	private final NotificationService notificationService;
 	private final CommonLookupService commonLookupService;
 	// private final MailService mailService; // Mail sending disabled during local development
@@ -39,17 +36,20 @@ public class ApprovalCommentService {
 		}
 		ApprovalRequest approval = approvalRequestRepository.findById(approvalId)
 			.orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
-		Users user = usersRepository.findByUsername(username).orElse(null);
-		UUID externalId = commonLookupService.resolveKeycloakUserIdByUsername(username)
-			.map(this::safeUuid)
+		CommonLookupService.KeycloakUserInfo userInfo = resolveUserInfo(username);
+		String trimmedContent = content.trim();
+		String resolvedName = safeUsername(userInfo, username);
+		UUID externalId = Optional.ofNullable(userInfo)
+			.map(CommonLookupService.KeycloakUserInfo::id)
 			.orElse(null);
 
 		ApprovalComment comment = ApprovalComment.builder()
 			.request(approval)
-			.user(user)
-			.content(content)
-			.authorName(user != null ? user.getUsername() : username)
-			.authorEmail(user != null ? user.getEmail() : null)
+			.content(trimmedContent)
+			.authorName(resolvedName)
+			.authorEmail(Optional.ofNullable(userInfo)
+				.map(CommonLookupService.KeycloakUserInfo::email)
+				.orElse(null))
 			.authorExternalId(externalId)
 			.build();
 		ApprovalComment saved = approvalCommentRepository.save(comment);
@@ -67,7 +67,8 @@ public class ApprovalCommentService {
 		String trimmedContent = content.trim();
 		comment.setContent(trimmedContent);
 		String normalizedUsername = username != null ? username.trim() : null;
-		if (comment.getUser() == null && normalizedUsername != null && !normalizedUsername.isEmpty()) {
+		if ((comment.getAuthorName() == null || comment.getAuthorName().isBlank())
+				&& normalizedUsername != null && !normalizedUsername.isEmpty()) {
 			comment.setAuthorName(normalizedUsername);
 		}
 		ApprovalComment saved = approvalCommentRepository.save(comment);
@@ -97,30 +98,18 @@ public class ApprovalCommentService {
 		String link = "/admin/approvals/" + approval.getId();
 
 		Set<String> receivers = new HashSet<>();
-		Optional.ofNullable(approval.getRequester())
-			.map(Users::getUsername)
-			.filter(name -> name != null && !name.isBlank())
-			.ifPresent(receivers::add);
 		Optional.ofNullable(approval.getRequesterName())
 			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::add);
 
 		if (approval.getSteps() != null) {
 			for (ApprovalStep step : approval.getSteps()) {
-				Optional.ofNullable(step.getApprover())
-					.map(Users::getUsername)
-					.filter(name -> name != null && !name.isBlank())
-					.ifPresent(receivers::add);
 				Optional.ofNullable(step.getApproverName())
 					.filter(name -> name != null && !name.isBlank())
 					.ifPresent(receivers::add);
 			}
 		}
 
-		Optional.ofNullable(comment.getUser())
-			.map(Users::getUsername)
-			.filter(name -> name != null && !name.isBlank())
-			.ifPresent(receivers::remove);
 		Optional.ofNullable(comment.getAuthorName())
 			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::remove);
@@ -145,29 +134,19 @@ public class ApprovalCommentService {
 		if (normalized.isEmpty()) {
 			throw new IllegalArgumentException("Username must not be empty");
 		}
-		Users owner = comment.getUser();
-		if (owner != null) {
-			String ownerName = Optional.ofNullable(owner.getUsername()).orElse("").trim();
-			if (!ownerName.isEmpty() && ownerName.equalsIgnoreCase(normalized)) {
-				return;
-			}
+		CommonLookupService.KeycloakUserInfo requesterInfo = resolveUserInfo(username);
+		UUID requesterExternalId = Optional.ofNullable(requesterInfo)
+			.map(CommonLookupService.KeycloakUserInfo::id)
+			.orElse(null);
+		UUID authorExternalId = comment.getAuthorExternalId();
+		if (authorExternalId != null && requesterExternalId != null && authorExternalId.equals(requesterExternalId)) {
+			return;
 		}
 		String authorName = Optional.ofNullable(comment.getAuthorName()).orElse("").trim();
 		if (!authorName.isEmpty() && authorName.equalsIgnoreCase(normalized)) {
 			return;
 		}
 		throw new IllegalStateException("You do not have permission to modify this comment");
-	}
-
-	private UUID safeUuid(String raw) {
-		if (raw == null || raw.isBlank()) {
-			return null;
-		}
-		try {
-			return UUID.fromString(raw);
-		} catch (IllegalArgumentException ignored) {
-			return null;
-		}
 	}
 
 	private String buildApprovalSubject(ApprovalRequest approval, Devices device) {
@@ -178,5 +157,24 @@ public class ApprovalCommentService {
 		return Optional.ofNullable(approval.getTitle())
 			.filter(title -> !title.isBlank())
 			.orElse("승인 ID " + approval.getId());
+	}
+
+	private CommonLookupService.KeycloakUserInfo resolveUserInfo(String username) {
+		if (username == null || username.isBlank()) {
+			return null;
+		}
+		return commonLookupService.resolveKeycloakUserInfoByUsername(username)
+			.orElseGet(() -> commonLookupService.fallbackUserInfo(username));
+	}
+
+	private String safeUsername(CommonLookupService.KeycloakUserInfo userInfo, String fallbackUsername) {
+		if (userInfo != null && userInfo.username() != null && !userInfo.username().isBlank()) {
+			return userInfo.username().trim();
+		}
+		if (fallbackUsername == null) {
+			return null;
+		}
+		String trimmed = fallbackUsername.trim();
+		return trimmed.isEmpty() ? null : trimmed;
 	}
 }

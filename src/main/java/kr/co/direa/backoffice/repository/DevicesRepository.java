@@ -21,9 +21,8 @@ public interface DevicesRepository extends JpaRepository<Devices, String> {
         + "LEFT JOIN FETCH d.manageDep "
         + "LEFT JOIN FETCH d.categoryId "
         + "LEFT JOIN FETCH d.projectId "
-        + "WHERE ((:userUuid IS NOT NULL AND d.userUuid = :userUuid) "
-        + "   OR (:userUuid IS NOT NULL AND d.userId.externalId = :userUuid) "
-        + "   OR (:normalizedUsername IS NOT NULL AND LOWER(d.realUser) = :normalizedUsername))")
+    + "WHERE ((:userUuid IS NOT NULL AND d.userUuid = :userUuid) "
+    + "   OR (:normalizedUsername IS NOT NULL AND LOWER(d.realUser) = :normalizedUsername))")
     List<Devices> findAllForUser(@Param("userUuid") java.util.UUID userUuid,
                  @Param("normalizedUsername") String normalizedUsername);
 

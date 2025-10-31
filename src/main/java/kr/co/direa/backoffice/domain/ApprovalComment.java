@@ -22,10 +22,6 @@ public class ApprovalComment extends BaseTimeEntity {
 	@JoinColumn(name = "request_id")
 	private ApprovalRequest request;
 
-	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "user_id")
-	private Users user;
-
 	@Column(name = "author_name", length = 100)
 	private String authorName;
 
@@ -40,16 +36,14 @@ public class ApprovalComment extends BaseTimeEntity {
 
 	@Builder
 	public ApprovalComment(ApprovalRequest request,
-			Users user,
 			String content,
 			String authorName,
 			String authorEmail,
 			UUID authorExternalId) {
 		this.request = request;
-		this.user = user;
 		this.content = content;
-		this.authorName = authorName != null ? authorName : user != null ? user.getUsername() : null;
-		this.authorEmail = authorEmail != null ? authorEmail : user != null ? user.getEmail() : null;
-		this.authorExternalId = authorExternalId != null ? authorExternalId : user != null ? user.getExternalId() : null;
+		this.authorName = authorName;
+		this.authorEmail = authorEmail;
+		this.authorExternalId = authorExternalId;
 	}
 }

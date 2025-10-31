@@ -8,8 +8,6 @@ import java.util.Optional;
 
 public interface ApproverRepository extends JpaRepository<Approver, Long> {
 
-    Optional<Approver> findByApprovalsIdAndUsersId(Long approvalId, Long userId);
-
     List<Approver> findByApprovalsId(Long approvalId);
 
     Optional<Approver> findByApprovalsIdAndStep(Long approvalId, int step);

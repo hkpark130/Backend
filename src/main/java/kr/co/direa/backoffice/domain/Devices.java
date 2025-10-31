@@ -21,10 +21,6 @@ public class Devices extends BaseTimeEntity {
     @Column(name = "id")
     private String id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id")
-    private Users userId;
-
     @Column(name = "real_user")
     private String realUser;
 
@@ -85,12 +81,11 @@ public class Devices extends BaseTimeEntity {
     private Date purchaseDate;
 
     @Builder
-    public Devices(String id, Users userId, Departments manageDep, Categories categoryId, String spec,
+    public Devices(String id, Departments manageDep, Categories categoryId, String spec,
                    Long price, String model, String description, String company,
                    Projects projectId, String sn, String status, Boolean isUsable, String purpose, Date purchaseDate,
                    List<DeviceApprovalDetail> approvalDetails, String adminDescription) {
         this.id = id;
-        this.userId = userId;
         this.manageDep = manageDep;
         this.categoryId = categoryId;
         this.projectId = projectId;
@@ -126,9 +121,8 @@ public class Devices extends BaseTimeEntity {
         this.purchaseDate = purchaseDate;
     }
 
-    public void update(Users user, String status, Boolean isUsable, Projects project, Departments manageDep,
-                       String description, String adminDescription) {
-        this.userId = user;
+    public void updateHolderMetadata(String status, Boolean isUsable, Projects project, Departments manageDep,
+                                     String description, String adminDescription) {
         this.status = status;
         this.isUsable = isUsable;
         this.projectId = project;

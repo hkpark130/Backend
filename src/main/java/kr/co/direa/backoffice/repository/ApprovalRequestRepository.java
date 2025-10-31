@@ -11,6 +11,6 @@ import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 
 public interface ApprovalRequestRepository extends JpaRepository<ApprovalRequest, Long> {
 
-    @EntityGraph(attributePaths = {"detail", "requester", "steps", "steps.approver"})
+    @EntityGraph(attributePaths = {"detail", "steps"})
     List<ApprovalRequest> findByCategoryAndStatusIn(ApprovalCategory category, List<ApprovalStatus> statuses);
 }

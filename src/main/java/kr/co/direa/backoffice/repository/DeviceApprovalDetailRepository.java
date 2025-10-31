@@ -11,8 +11,7 @@ import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 public interface DeviceApprovalDetailRepository extends JpaRepository<DeviceApprovalDetail, Long> {
 
     @Query("SELECT dad FROM DeviceApprovalDetail dad " +
-            "JOIN FETCH dad.request req " +
-            "LEFT JOIN FETCH req.requester " +
+        "JOIN FETCH dad.request req " +
             "LEFT JOIN FETCH dad.device dev " +
             "LEFT JOIN FETCH dad.requestedProject " +
             "LEFT JOIN FETCH dad.requestedDepartment " +

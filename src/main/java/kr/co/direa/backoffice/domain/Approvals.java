@@ -18,10 +18,6 @@ public abstract class Approvals extends BaseTimeEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id")
-    private Users userId;
-
     @Column(name = "approval_info")
     private String approvalInfo;
 
@@ -37,10 +33,9 @@ public abstract class Approvals extends BaseTimeEntity {
     protected Approvals() {
     }
 
-    protected Approvals(Long id, Users userId, String approvalInfo, String reason,
+    protected Approvals(Long id, String approvalInfo, String reason,
                         List<Approver> approvers, LocalDateTime deadline) {
         this.id = id;
-        this.userId = userId;
         this.approvalInfo = approvalInfo;
         this.reason = reason;
         this.deadline = deadline;

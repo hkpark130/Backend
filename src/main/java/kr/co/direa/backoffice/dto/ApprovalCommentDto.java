@@ -12,9 +12,8 @@ import java.time.LocalDateTime;
 public class ApprovalCommentDto implements Serializable {
     private Long id;
     private Long approvalId;
-    private Long userId;
-    private String username;
     private String authorName;
+    private String username;
     private String authorEmail;
     private String authorExternalId;
     private String content;
@@ -24,18 +23,12 @@ public class ApprovalCommentDto implements Serializable {
     public ApprovalCommentDto(ApprovalComment entity) {
         this.id = entity.getId();
         this.approvalId = entity.getRequest() != null ? entity.getRequest().getId() : null;
-        if (entity.getUser() != null) {
-            this.userId = entity.getUser().getId();
-            this.username = entity.getUser().getUsername();
-        }
         this.authorName = entity.getAuthorName();
+    this.username = entity.getAuthorName();
         this.authorEmail = entity.getAuthorEmail();
         this.authorExternalId = entity.getAuthorExternalId() != null
                 ? entity.getAuthorExternalId().toString()
                 : null;
-        if (this.username == null) {
-            this.username = this.authorName;
-        }
         this.content = entity.getContent();
         this.createdDate = entity.getCreatedDate();
         this.modifiedDate = entity.getModifiedDate();

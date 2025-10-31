@@ -2,14 +2,18 @@ package kr.co.direa.backoffice.service;
 
 import java.text.Collator;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -17,6 +21,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import kr.co.direa.backoffice.config.ApprovalProperties;
 import kr.co.direa.backoffice.constant.Constants;
 import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.ApprovalStep;
@@ -24,7 +29,6 @@ import kr.co.direa.backoffice.domain.Departments;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
-import kr.co.direa.backoffice.domain.Users;
 import kr.co.direa.backoffice.domain.enums.ApprovalCategory;
 import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
@@ -37,7 +41,6 @@ import kr.co.direa.backoffice.repository.ApprovalStepRepository;
 import kr.co.direa.backoffice.repository.DepartmentsRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository;
 import kr.co.direa.backoffice.repository.ProjectsRepository;
-import kr.co.direa.backoffice.repository.UsersRepository;
 import kr.co.direa.backoffice.vo.ApprovalSearchRequest;
 import lombok.RequiredArgsConstructor;
 
@@ -47,29 +50,30 @@ public class ApprovalDeviceService {
     private final ApprovalRequestRepository approvalRequestRepository;
     private final ApprovalStepRepository approvalStepRepository;
     private final DevicesRepository devicesRepository;
-    private final UsersRepository usersRepository;
     private final ProjectsRepository projectsRepository;
     private final DepartmentsRepository departmentsRepository;
     private final NotificationService notificationService;
     private final ApprovalCommentService approvalCommentService;
     private final CommonLookupService commonLookupService;
+    private final ApprovalProperties approvalProperties;
 
     @Transactional
     public ApprovalDeviceDto submitApplication(DeviceApplicationRequestDto request) {
-        DeviceApprovalAction action = Optional.ofNullable(DeviceApprovalAction.fromDisplayName(request.getType()))
-                .orElseThrow(() -> new IllegalArgumentException("Unsupported approval type: " + request.getType()));
+    DeviceApprovalAction action = Optional.ofNullable(DeviceApprovalAction.fromDisplayName(request.getType()))
+        .orElseThrow(() -> new IllegalArgumentException("Unsupported approval type: " + request.getType()));
 
-        Devices device = devicesRepository.findById(request.getDeviceId())
-                .orElseThrow(() -> new IllegalArgumentException("Device not found: " + request.getDeviceId()));
-        Users requester = usersRepository.findByUsername(request.getUserName()).orElse(null);
-        UUID requesterExternalId = commonLookupService.resolveKeycloakUserIdByUsername(request.getUserName())
-                .map(this::safeUuid)
-                .orElse(null);
+    Devices device = devicesRepository.findById(request.getDeviceId())
+        .orElseThrow(() -> new IllegalArgumentException("Device not found: " + request.getDeviceId()));
+    CommonLookupService.KeycloakUserInfo requesterInfo = resolveUserInfo(request.getUserName());
+    List<String> approverUsernames = prepareApproverSequence(request.getApprovers(), true);
+    if (approverUsernames.isEmpty()) {
+        throw new IllegalStateException("No approvers available for device approval workflow");
+    }
 
         Projects requestedProject = lookupProject(request.getProjectName());
         Departments requestedDepartment = lookupDepartment(request.getDepartmentName());
 
-        applyDeviceStateOnSubmission(device, request, action, requester);
+    applyDeviceStateOnSubmission(device, request, action);
 
         DeviceApprovalDetail detail = DeviceApprovalDetail.create();
         detail.setDevice(device);
@@ -83,27 +87,18 @@ public class ApprovalDeviceService {
         detail.setMemo(request.getDescription());
         detail.updateFromDevice(device);
 
-        ApprovalRequest approval = ApprovalRequest.builder()
-                .requester(requester)
-                .category(ApprovalCategory.DEVICE)
+    ApprovalRequest approval = ApprovalRequest.builder()
+        .category(ApprovalCategory.DEVICE)
                 .status(ApprovalStatus.PENDING)
                 .title(buildTitle(action, device))
                 .reason(request.getReason())
                 .dueDate(request.getDeadline())
                 .build();
 
-        if (requester == null) {
-            approval.setRequesterName(request.getUserName());
-        }
-        if (approval.getRequesterEmail() == null && requester != null) {
-            approval.setRequesterEmail(requester.getEmail());
-        }
-        if (requesterExternalId != null) {
-            approval.setRequesterExternalId(requesterExternalId);
-        }
+        applyRequesterMetadata(approval, requesterInfo, request.getUserName());
 
-        detail.attachTo(approval);
-        buildApprovalSteps(approval, request.getApprovers());
+    detail.attachTo(approval);
+    buildApprovalSteps(approval, approverUsernames);
         approval.markSubmitted();
 
         ApprovalRequest saved = approvalRequestRepository.save(approval);
@@ -119,17 +114,19 @@ public class ApprovalDeviceService {
 
     @Transactional
     public ApprovalDeviceDto approve(Long approvalId, String approverUsername, String comment) {
-        ApprovalRequest approval = approvalRequestRepository.findById(approvalId)
-                .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
-        Users approverUser = usersRepository.findByUsername(approverUsername).orElse(null);
-        UUID approverExternalId = commonLookupService.resolveKeycloakUserIdByUsername(approverUsername)
-                .map(this::safeUuid)
-                .orElse(null);
+    ApprovalRequest approval = approvalRequestRepository.findById(approvalId)
+        .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
+    CommonLookupService.KeycloakUserInfo approverInfo = resolveUserInfo(approverUsername);
+    String normalizedApproverUsername = safeUsername(approverInfo, approverUsername);
+    if (normalizedApproverUsername == null) {
+        throw new IllegalArgumentException("Approver username must not be empty");
+    }
+    UUID approverExternalId = approverInfo != null ? approverInfo.id() : null;
 
-        ApprovalStep step = resolveApprovalStep(approvalId, approverUsername, approverUser, approverExternalId)
+    ApprovalStep step = resolveApprovalStep(approvalId, normalizedApproverUsername, approverExternalId)
                 .orElseThrow(() -> new IllegalStateException("Approver not assigned to this approval"));
 
-        applyApproverMetadata(step, approverUser, approverUsername, approverExternalId);
+    applyApproverMetadata(step, approverInfo, normalizedApproverUsername);
 
         if (step.getStatus().isDecisionMade()) {
             throw new IllegalStateException("Approval already processed for this step");
@@ -156,7 +153,7 @@ public class ApprovalDeviceService {
         }
 
         if (comment != null && !comment.isBlank()) {
-            approvalCommentService.addComment(approvalId, approverUsername, comment);
+            approvalCommentService.addComment(approvalId, normalizedApproverUsername, comment);
         }
 
         return new ApprovalDeviceDto(approvalRequestRepository.save(approval));
@@ -166,15 +163,17 @@ public class ApprovalDeviceService {
     public ApprovalDeviceDto reject(Long approvalId, String approverUsername, String reason) {
         ApprovalRequest approval = approvalRequestRepository.findById(approvalId)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
-        Users approverUser = usersRepository.findByUsername(approverUsername).orElse(null);
-        UUID approverExternalId = commonLookupService.resolveKeycloakUserIdByUsername(approverUsername)
-                .map(this::safeUuid)
-                .orElse(null);
+        CommonLookupService.KeycloakUserInfo approverInfo = resolveUserInfo(approverUsername);
+        String normalizedApproverUsername = safeUsername(approverInfo, approverUsername);
+        if (normalizedApproverUsername == null) {
+            throw new IllegalArgumentException("Approver username must not be empty");
+        }
+        UUID approverExternalId = approverInfo != null ? approverInfo.id() : null;
 
-        ApprovalStep step = resolveApprovalStep(approvalId, approverUsername, approverUser, approverExternalId)
+        ApprovalStep step = resolveApprovalStep(approvalId, normalizedApproverUsername, approverExternalId)
                 .orElseThrow(() -> new IllegalStateException("Approver not assigned to this approval"));
 
-        applyApproverMetadata(step, approverUser, approverUsername, approverExternalId);
+        applyApproverMetadata(step, approverInfo, normalizedApproverUsername);
 
         if (step.getStatus().isDecisionMade()) {
             throw new IllegalStateException("Approval already processed for this step");
@@ -184,10 +183,10 @@ public class ApprovalDeviceService {
         approval.markRejected();
 
         if (reason != null && !reason.isBlank()) {
-            approvalCommentService.addComment(approvalId, approverUsername, reason);
+            approvalCommentService.addComment(approvalId, normalizedApproverUsername, reason);
         }
 
-    notifyApplicantOnRejection(approval, approverUser, approverUsername, reason);
+    notifyApplicantOnRejection(approval, approverInfo, normalizedApproverUsername);
 
         return new ApprovalDeviceDto(approvalRequestRepository.save(approval));
     }
@@ -197,12 +196,13 @@ public class ApprovalDeviceService {
         ApprovalRequest approval = approvalRequestRepository.findById(approvalId)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
 
-        if (approverUsernames == null || approverUsernames.isEmpty()) {
+        List<String> sanitizedApprovers = prepareApproverSequence(approverUsernames, false);
+        if (sanitizedApprovers.isEmpty()) {
             throw new IllegalArgumentException("Approver list must not be empty");
         }
 
         approval.getSteps().clear();
-        buildApprovalSteps(approval, approverUsernames);
+        buildApprovalSteps(approval, sanitizedApprovers);
         approval.restartWorkflow();
 
         ApprovalRequest saved = approvalRequestRepository.save(approval);
@@ -472,22 +472,52 @@ public class ApprovalDeviceService {
         }
         int sequence = 1;
         for (String username : approverUsernames) {
-            Users approver = usersRepository.findByUsername(username).orElse(null);
-            UUID externalId = commonLookupService.resolveKeycloakUserIdByUsername(username)
-                    .map(this::safeUuid)
-                    .orElse(null);
-
+            CommonLookupService.KeycloakUserInfo approverInfo = resolveUserInfo(username);
+            String normalizedUsername = safeUsername(approverInfo, username);
+            if (normalizedUsername == null) {
+                throw new IllegalArgumentException("Approver username must not be empty");
+            }
             ApprovalStep step = ApprovalStep.builder()
-                    .approver(approver)
                     .sequence(sequence++)
                     .build();
-            applyApproverMetadata(step, approver, username, externalId);
+            applyApproverMetadata(step, approverInfo, normalizedUsername);
             approval.addStep(step);
         }
     }
 
-    private void applyDeviceStateOnSubmission(Devices device, DeviceApplicationRequestDto request,
-                                              DeviceApprovalAction action, Users requester) {
+    private List<String> prepareApproverSequence(List<String> requestedApprovers, boolean fallbackToDefault) {
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        Optional.ofNullable(requestedApprovers)
+                .orElse(Collections.emptyList())
+                .stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(name -> !name.isBlank())
+                .forEach(unique::add);
+
+        if (!unique.isEmpty() || !fallbackToDefault) {
+            return new ArrayList<>(unique);
+        }
+
+        LinkedHashSet<String> defaults = approvalProperties.getDefaultApprovers().stream()
+                .sorted(Comparator.comparingInt(ApprovalProperties.Stage::getStage))
+                .map(stage -> {
+                    String username = stage.getUsername();
+                    if (username != null && !username.isBlank()) {
+                        return username.trim();
+                    }
+                    String displayName = stage.getDisplayName();
+                    return displayName != null ? displayName.trim() : null;
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return new ArrayList<>(defaults);
+    }
+
+    private void applyDeviceStateOnSubmission(Devices device,
+                                              DeviceApplicationRequestDto request,
+                                              DeviceApprovalAction action) {
         if (action == DeviceApprovalAction.RENTAL) {
             device.setIsUsable(Boolean.FALSE);
         } else if (request.getIsUsable() != null) {
@@ -536,33 +566,31 @@ public class ApprovalDeviceService {
                                        DeviceApprovalDetail detail) {
         device.setIsUsable(Boolean.FALSE);
 
-        Users owner = approval.getRequester();
-        device.setUserId(owner);
+    UUID resolvedUuid = Optional.ofNullable(approval.getRequesterExternalId()).orElse(null);
+    if (resolvedUuid == null) {
+        resolvedUuid = Optional.ofNullable(approval.getRequesterName())
+            .filter(name -> !name.isBlank())
+            .flatMap(commonLookupService::resolveKeycloakUserIdByUsername)
+            .map(this::safeUuid)
+            .orElse(null);
+    }
 
-        UUID resolvedUuid = Optional.ofNullable(approval.getRequesterExternalId())
-                .orElseGet(() -> Optional.ofNullable(owner)
-                        .map(Users::getExternalId)
-                        .orElse(null));
+    device.setUserUuid(resolvedUuid);
 
-        if (resolvedUuid == null) {
-            String fallbackUsername = Optional.ofNullable(owner)
-                    .map(Users::getUsername)
-                    .orElse(approval.getRequesterName());
-            resolvedUuid = Optional.ofNullable(fallbackUsername)
-                    .filter(name -> !name.isBlank())
-                    .flatMap(commonLookupService::resolveKeycloakUserIdByUsername)
-                    .map(this::safeUuid)
-                    .orElse(null);
+    if ((detail.getRequestedRealUser() == null || detail.getRequestedRealUser().isBlank())) {
+        String requesterName = Optional.ofNullable(approval.getRequesterName())
+            .filter(name -> !name.isBlank())
+            .orElse(null);
+        if (requesterName != null) {
+        device.setRealUser(requesterName);
         }
-
-        device.setUserUuid(resolvedUuid);
+    }
     }
 
     private void applyReturnCompletion(Devices device, DeviceApprovalDetail detail) {
-        device.setIsUsable(Boolean.TRUE);
-        device.setUserId(null);
-        device.setUserUuid(null);
-        device.setRealUser(null);
+    device.setIsUsable(Boolean.TRUE);
+    device.setUserUuid(null);
+    device.setRealUser(null);
     }
 
     private void applyRequestedAttributes(Devices device, DeviceApprovalDetail detail) {
@@ -604,54 +632,55 @@ public class ApprovalDeviceService {
     }
 
     private void notifyApprover(ApprovalRequest approval, ApprovalStep step, String message) {
-    String targetReceiver = Optional.ofNullable(step.getApprover())
-        .map(Users::getUsername)
-        .orElse(step.getApproverName());
-    if (targetReceiver == null || targetReceiver.isBlank()) {
+    String targetReceiver = Optional.ofNullable(step.getApproverName())
+        .filter(name -> !name.isBlank())
+        .orElse(null);
+        if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
-    String subjectPrefix = (message != null && !message.isBlank()) ? message : "[장비 결재 요청]";
-    String subject = subjectPrefix + " " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetReceiver, subject,
+        String subjectPrefix = (message != null && !message.isBlank()) ? message : "[장비 결재 요청]";
+        String subject = subjectPrefix + " " + buildApprovalSubject(approval);
+        notificationService.createNotification(targetReceiver, subject,
                 Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
     }
 
     private void notifyApplicantOnCompletion(ApprovalRequest approval) {
-    String targetReceiver = Optional.ofNullable(approval.getRequester())
-        .map(Users::getUsername)
-        .orElse(approval.getRequesterName());
-    if (targetReceiver == null || targetReceiver.isBlank()) {
+    String targetReceiver = Optional.ofNullable(approval.getRequesterName())
+        .filter(name -> !name.isBlank())
+        .orElse(null);
+        if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
         String subject = "[장비 결재 완료] " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetReceiver, subject,
+        notificationService.createNotification(targetReceiver, subject,
                 Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
     }
 
-    private void notifyApplicantOnRejection(ApprovalRequest approval, Users approver, String approverUsername, String reason) {
+    private void notifyApplicantOnRejection(ApprovalRequest approval,
+                                            CommonLookupService.KeycloakUserInfo approverInfo,
+                                            String approverUsername) {
         String subject = "[장비 결재 반려] " + buildApprovalSubject(approval);
 
-    String requesterReceiver = Optional.ofNullable(approval.getRequester())
-        .map(Users::getUsername)
-        .orElse(approval.getRequesterName());
-    if (requesterReceiver != null && !requesterReceiver.isBlank()) {
-        notificationService.createNotification(requesterReceiver, subject,
+    String requesterReceiver = Optional.ofNullable(approval.getRequesterName())
+        .filter(name -> !name.isBlank())
+        .orElse(null);
+        if (requesterReceiver != null && !requesterReceiver.isBlank()) {
+            notificationService.createNotification(requesterReceiver, subject,
                     Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
         }
 
-    String approverReceiver = Optional.ofNullable(approver)
-        .map(Users::getUsername)
+    String approverReceiver = Optional.ofNullable(safeUsername(approverInfo, approverUsername))
         .orElse(approverUsername);
-    if (approverReceiver != null && !approverReceiver.isBlank()) {
-        notificationService.createNotification(approverReceiver, subject,
+        if (approverReceiver != null && !approverReceiver.isBlank()) {
+            notificationService.createNotification(approverReceiver, subject,
                     Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId()));
         }
     }
 
     private void notifyApplicantOnProgress(ApprovalRequest approval, ApprovalStep completedStep) {
-        String targetReceiver = Optional.ofNullable(approval.getRequester())
-                .map(Users::getUsername)
-                .orElse(approval.getRequesterName());
+    String targetReceiver = Optional.ofNullable(approval.getRequesterName())
+        .filter(name -> !name.isBlank())
+        .orElse(null);
         if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
@@ -692,39 +721,40 @@ public class ApprovalDeviceService {
 
     private Optional<ApprovalStep> resolveApprovalStep(Long approvalId,
                                                        String approverUsername,
-                                                       Users approverUser,
                                                        UUID approverExternalId) {
-        Optional<ApprovalStep> step = Optional.empty();
-        if (approverUser != null) {
-            step = approvalStepRepository.findByRequestIdAndApproverId(approvalId, approverUser.getId());
+        if (approverExternalId != null) {
+            Optional<ApprovalStep> step = approvalStepRepository.findByRequestIdAndApproverExternalId(approvalId, approverExternalId);
+            if (step.isPresent()) {
+                return step;
+            }
         }
-        if (step.isEmpty() && approverExternalId != null) {
-            step = approvalStepRepository.findByRequestIdAndApproverExternalId(approvalId, approverExternalId);
+        String normalized = approverUsername != null ? approverUsername.trim() : null;
+        if (normalized == null || normalized.isEmpty()) {
+            return Optional.empty();
         }
-        if (step.isEmpty()) {
-            step = approvalStepRepository.findByRequestIdAndApproverName(approvalId, approverUsername);
-        }
-        return step;
+        return approvalStepRepository.findByRequestIdAndApproverName(approvalId, normalized);
     }
 
     private void applyApproverMetadata(ApprovalStep step,
-                                       Users approverUser,
-                                       String approverUsername,
-                                       UUID approverExternalId) {
+                                       CommonLookupService.KeycloakUserInfo approverInfo,
+                                       String fallbackUsername) {
         if (step == null) {
             return;
         }
-        if (step.getApprover() == null && approverUser != null) {
-            step.setApprover(approverUser);
+        if (approverInfo != null) {
+            if (step.getApproverName() == null || step.getApproverName().isBlank()) {
+                step.setApproverName(safeUsername(approverInfo, fallbackUsername));
+            }
+            if ((step.getApproverEmail() == null || step.getApproverEmail().isBlank())
+                    && approverInfo.email() != null && !approverInfo.email().isBlank()) {
+                step.setApproverEmail(approverInfo.email());
+            }
+            if (approverInfo.id() != null && step.getApproverExternalId() == null) {
+                step.setApproverExternalId(approverInfo.id());
+            }
         }
-        if (step.getApproverName() == null || step.getApproverName().isBlank()) {
-            step.setApproverName(approverUser != null ? approverUser.getUsername() : approverUsername);
-        }
-        if (step.getApproverEmail() == null && approverUser != null) {
-            step.setApproverEmail(approverUser.getEmail());
-        }
-        if (approverExternalId != null && step.getApproverExternalId() == null) {
-            step.setApproverExternalId(approverExternalId);
+        if ((step.getApproverName() == null || step.getApproverName().isBlank()) && fallbackUsername != null) {
+            step.setApproverName(fallbackUsername);
         }
     }
 
@@ -756,4 +786,145 @@ public class ApprovalDeviceService {
         }
         return departmentsRepository.findByName(departmentName).orElse(null);
     }
+
+    private CommonLookupService.KeycloakUserInfo resolveUserInfo(String username) {
+        if (username == null || username.isBlank()) {
+            return null;
+        }
+
+        String normalized = username.trim();
+        Optional<ApprovalProperties.Stage> defaultStage = findDefaultApproverStage(normalized);
+        if (defaultStage.isPresent()) {
+            ApprovalProperties.Stage stage = defaultStage.get();
+            UUID stageUuid = stage.getKeycloakId();
+            String resolvedUsername = firstNonBlank(stage.getUsername(), stage.getDisplayName(), normalized);
+            String displayName = firstNonBlank(stage.getDisplayName(), stage.getUsername(), normalized);
+            return new CommonLookupService.KeycloakUserInfo(stageUuid, resolvedUsername, null, displayName);
+        }
+
+        return commonLookupService.resolveKeycloakUserInfoByUsername(normalized)
+                .orElseGet(() -> commonLookupService.fallbackUserInfo(normalized));
+    }
+
+    private void applyRequesterMetadata(ApprovalRequest approval,
+                                        CommonLookupService.KeycloakUserInfo requesterInfo,
+                                        String fallbackUsername) {
+        if (approval == null) {
+            return;
+        }
+        CommonLookupService.KeycloakUserInfo effectiveRequester = requesterInfo;
+
+        UUID resolvedExternalId = Optional.ofNullable(effectiveRequester)
+                .map(CommonLookupService.KeycloakUserInfo::id)
+                .orElse(null);
+
+        if (resolvedExternalId == null) {
+            resolvedExternalId = commonLookupService.currentUserIdFromJwt()
+                    .map(this::safeUuid)
+                    .orElse(null);
+        }
+
+        if (resolvedExternalId == null && fallbackUsername != null) {
+            resolvedExternalId = findDefaultApproverStage(fallbackUsername)
+                    .map(ApprovalProperties.Stage::getKeycloakId)
+                    .orElse(null);
+        }
+
+        if (resolvedExternalId == null && effectiveRequester != null) {
+            UUID candidateId = findDefaultApproverStage(effectiveRequester.username())
+                    .map(ApprovalProperties.Stage::getKeycloakId)
+                    .orElse(null);
+            if (candidateId == null) {
+                candidateId = findDefaultApproverStage(effectiveRequester.displayName())
+                        .map(ApprovalProperties.Stage::getKeycloakId)
+                        .orElse(null);
+            }
+            resolvedExternalId = candidateId;
+        }
+
+        if (resolvedExternalId == null) {
+            throw new IllegalStateException("요청자 Keycloak UUID를 설정할 수 없습니다.");
+        }
+
+        approval.setRequesterExternalId(resolvedExternalId);
+
+        if (effectiveRequester == null || effectiveRequester.id() == null || !resolvedExternalId.equals(effectiveRequester.id())) {
+            effectiveRequester = commonLookupService.resolveKeycloakUserInfoById(resolvedExternalId)
+                    .orElse(effectiveRequester);
+        }
+
+        if (effectiveRequester == null && fallbackUsername != null && !fallbackUsername.isBlank()) {
+            effectiveRequester = resolveUserInfo(fallbackUsername);
+        }
+
+        if (effectiveRequester != null) {
+            String displayName = Optional.ofNullable(effectiveRequester.displayName())
+                    .map(String::trim)
+                    .filter(name -> !name.isBlank())
+                    .orElse(null);
+
+            if (displayName != null) {
+                approval.setRequesterName(displayName);
+            } else {
+                String resolvedName = safeUsername(effectiveRequester, fallbackUsername);
+                if (resolvedName != null && !resolvedName.isBlank()) {
+                    approval.setRequesterName(resolvedName);
+                }
+            }
+
+            if (effectiveRequester.email() != null && !effectiveRequester.email().isBlank()) {
+                approval.setRequesterEmail(effectiveRequester.email());
+            }
+        }
+
+        if ((approval.getRequesterName() == null || approval.getRequesterName().isBlank())
+                && fallbackUsername != null && !fallbackUsername.isBlank()) {
+            approval.setRequesterName(fallbackUsername.trim());
+        }
+    }
+
+    private String safeUsername(CommonLookupService.KeycloakUserInfo userInfo, String fallbackUsername) {
+        if (userInfo != null && userInfo.username() != null && !userInfo.username().isBlank()) {
+            return userInfo.username().trim();
+        }
+        if (fallbackUsername == null) {
+            return null;
+        }
+        String trimmed = fallbackUsername.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private Optional<ApprovalProperties.Stage> findDefaultApproverStage(String candidate) {
+        if (candidate == null) {
+            return Optional.empty();
+        }
+        String normalized = candidate.trim();
+        if (normalized.isEmpty()) {
+            return Optional.empty();
+        }
+        return approvalProperties.getDefaultApprovers().stream()
+                .filter(stage -> matchesCandidate(normalized, stage.getUsername())
+                        || matchesCandidate(normalized, stage.getDisplayName()))
+                .findFirst();
+    }
+
+    private boolean matchesCandidate(String normalized, String value) {
+        return value != null && !value.isBlank() && normalized.equalsIgnoreCase(value.trim());
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null) {
+                String trimmed = value.trim();
+                if (!trimmed.isBlank()) {
+                    return trimmed;
+                }
+            }
+        }
+        return null;
+    }
+
 }

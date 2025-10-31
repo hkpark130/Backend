@@ -5,7 +5,6 @@ import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.DeviceTag;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
-import kr.co.direa.backoffice.domain.Users;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -17,15 +16,16 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Getter
 @Setter
 @NoArgsConstructor
 public class DeviceDto implements Serializable {
     private String id;
-    private Long userId;
     private String username;
     private String userEmail;
+    private UUID userUuid;
     private String realUser;
     private String manageDepName;
     private String categoryName;
@@ -50,11 +50,10 @@ public class DeviceDto implements Serializable {
     private List<Map<String, Object>> history;
 
     public DeviceDto(Devices entity, List<Map<String, Object>> history) {
-    this.id = entity.getId();
-    Users user = entity.getUserId();
-    this.userId = Optional.ofNullable(user).map(Users::getId).orElse(null);
-    this.username = Optional.ofNullable(user).map(Users::getUsername).orElse(null);
-    this.userEmail = Optional.ofNullable(user).map(Users::getEmail).orElse(null);
+        this.id = entity.getId();
+        this.username = entity.getRealUser();
+        this.userEmail = null;
+        this.userUuid = entity.getUserUuid();
         this.realUser = entity.getRealUser();
         this.manageDepName = Optional.ofNullable(entity.getManageDep()).map(dep -> dep.getName()).orElse(null);
         this.categoryName = Optional.ofNullable(entity.getCategoryId()).map(category -> category.getName()).orElse(null);
