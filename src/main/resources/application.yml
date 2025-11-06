@@ -38,6 +38,7 @@ jasypt:
     password: mySecretKey
 
 constants:
+  frontend: "http://localhost:5173"
   keycloak-url: "https://keycloak.direa.synology.me"
   realm: "sso"
   admin: admin
@@ -144,7 +145,7 @@ jasypt:
     password: ${JASYPT_KEY}
 
 constants:
-  frontend: "http://192.168.3.49:5173"
+  frontend: ${FRONTEND_URL:http://192.168.3.49:5173}
   keycloak-url: "https://keycloak.direa.synology.me"
   realm: "sso"
   admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
@@ -187,12 +188,14 @@ app:
   cors:
     allowed-origins:
       - ${CORS_ALLOWED_ORIGINS:http://backoffice.direa.synology.me}
+  upload:
+    dir: uploads
   keycloak:
-    url: ${APP_KEYCLOAK_URL}
-    realm: ${APP_KEYCLOAK_REALM}
-    admin-client-id: ${APP_KEYCLOAK_ADMIN_CLIENT_ID}
+    url: https://keycloak.direa.synology.me
+    realm: sso
+    admin-client-id: admin-cli
   ldap:
-    user-base: ${APP_LDAP_USER_BASE}
+    user-base: ${APP_LDAP_USER_BASE:cn=Users}
     login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
     password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
   approval:
