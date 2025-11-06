@@ -5,8 +5,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Getter
 @NoArgsConstructor
@@ -21,7 +21,7 @@ public class Tags extends BaseTimeEntity {
     private String name;
 
     @OneToMany(mappedBy = "tag", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<DeviceTag> deviceTags = new ArrayList<>();
+    private Set<DeviceTag> deviceTags = new LinkedHashSet<>();
 
     @Builder
     public Tags(Long id, String name) {

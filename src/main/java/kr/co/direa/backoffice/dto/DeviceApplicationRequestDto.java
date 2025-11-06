@@ -24,6 +24,7 @@ public class DeviceApplicationRequestDto {
     private String description;
     private String categoryName;
     private String projectName;
+    private String projectCode;
     private String departmentName;
     private String img;
     private String type;
@@ -31,6 +32,10 @@ public class DeviceApplicationRequestDto {
     private Boolean isUsable;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime deadline;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    private LocalDateTime usageStartDate;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    private LocalDateTime usageEndDate;
     private List<String> tag = new ArrayList<>();
     private List<String> approvers = new ArrayList<>();
 }

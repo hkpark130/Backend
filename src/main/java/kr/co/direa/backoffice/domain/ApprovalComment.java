@@ -1,5 +1,7 @@
 package kr.co.direa.backoffice.domain;
 
+import java.util.UUID;
+
 import jakarta.persistence.*;
 import lombok.Builder;
 import lombok.Getter;
@@ -17,20 +19,31 @@ public class ApprovalComment extends BaseTimeEntity {
 	private Long id;
 
 	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "approval_id")
-	private Approvals approvals;
+	@JoinColumn(name = "request_id")
+	private ApprovalRequest request;
 
-	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "user_id")
-	private Users user;
+	@Column(name = "author_name", length = 100)
+	private String authorName;
+
+	@Column(name = "author_email", length = 255)
+	private String authorEmail;
+
+	@Column(name = "author_external_id", length = 36)
+	private UUID authorExternalId;
 
 	@Column(name = "content", columnDefinition = "TEXT")
 	private String content;
 
 	@Builder
-	public ApprovalComment(Approvals approvals, Users user, String content) {
-		this.approvals = approvals;
-		this.user = user;
+	public ApprovalComment(ApprovalRequest request,
+			String content,
+			String authorName,
+			String authorEmail,
+			UUID authorExternalId) {
+		this.request = request;
 		this.content = content;
+		this.authorName = authorName;
+		this.authorEmail = authorEmail;
+		this.authorExternalId = authorExternalId;
 	}
 }

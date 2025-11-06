@@ -9,9 +9,9 @@ import java.util.List;
 
 public interface ApprovalDevicesRepository extends JpaRepository<ApprovalDevices, Long> {
 
-    @Query("SELECT ad FROM ApprovalDevices ad JOIN FETCH ad.deviceId d WHERE d.id = :deviceId ORDER BY ad.createdDate DESC")
+    @Query("SELECT DISTINCT ad FROM ApprovalDevices ad " +
+        "LEFT JOIN FETCH ad.projectId " +
+        "JOIN FETCH ad.deviceId d " +
+        "WHERE d.id = :deviceId ORDER BY ad.createdDate DESC")
     List<ApprovalDevices> findHistoryByDeviceId(@Param("deviceId") String deviceId);
-
-    @Query("SELECT ad FROM ApprovalDevices ad JOIN FETCH ad.userId u WHERE u.username = :username ORDER BY ad.createdDate DESC")
-    List<ApprovalDevices> findAllByUsername(@Param("username") String username);
 }

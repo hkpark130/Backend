@@ -7,5 +7,5 @@ import java.util.List;
 
 public interface ApprovalCommentRepository extends JpaRepository<ApprovalComment, Long> {
 
-	List<ApprovalComment> findByApprovalsIdOrderByCreatedDateAsc(Long approvalId);
+	List<ApprovalComment> findByRequestIdOrderByCreatedDateAsc(Long approvalId);
 }

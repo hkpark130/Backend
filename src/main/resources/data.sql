@@ -69,12 +69,12 @@ INSERT INTO projects (name, code) VALUES ('MG손해보험 플랫폼 보험비교
 INSERT INTO projects (name, code) VALUES ('신한금융그룹 공통 AI컨텍센터 플랫폼 구축', '0219');
 INSERT INTO projects (name, code) VALUES ('농협(은행)금융상품 비교 플랫폼 구축', '0220');
 
-INSERT INTO devices (id, user_id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id)
-values ('DIR-N-101', null, 1, 'RAM: 16G CPU: 8core', 1000, 'LSBX2433', '부팅 느림', 'SAMSUNG', 'ND6179NBK', '정상', true, '개발', '2021-09-01', 1, 1);
-INSERT INTO devices (id, user_id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id)
-values ('DIR-N-201', 2, 1, 'RAM: 32G CPU: 12core', 1800, 'LG Gram Pro', '반납 예정인 모바일 개발 장비', 'LG', 'SN-2024-201', '정상', false, '모바일 개발', '2024-02-15', 1, 2);
-INSERT INTO devices (id, user_id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id)
-values ('DIR-S-301', null, 2, 'RAM: 64G CPU: 16core', 3600, 'Dell PowerEdge', '테스트 환경 서버', 'DELL', 'SN-2023-301', '정상', true, '테스트', '2023-07-10', 2, 3);
+INSERT INTO devices (id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id, real_user, user_uuid)
+values ('DIR-N-101', 1, 'RAM: 16G CPU: 8core', 1000, 'LSBX2433', '부팅 느림', 'SAMSUNG', 'ND6179NBK', '정상', true, '개발', '2021-09-01', 1, 1, NULL, NULL);
+INSERT INTO devices (id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id, real_user, user_uuid)
+values ('DIR-N-201', 1, 'RAM: 32G CPU: 12core', 1800, 'LG Gram Pro', '반납 예정인 모바일 개발 장비', 'LG', 'SN-2024-201', '정상', false, '모바일 개발', '2024-02-15', 1, 2, '박지현', NULL);
+INSERT INTO devices (id, manage_dep, spec, price, model, description, company, sn, status, is_usable, purpose, purchase_date, category_id, project_id, real_user, user_uuid)
+values ('DIR-S-301', 2, 'RAM: 64G CPU: 16core', 3600, 'Dell PowerEdge', '테스트 환경 서버', 'DELL', 'SN-2023-301', '정상', true, '테스트', '2023-07-10', 2, 3, '이도현', NULL);
 -- values ('DIR-N-114', 1, 1, 'RAM: 16G CPU: 8core', 1000, 'LSBX24', '폐기한 기기', 'SAMSUNG', 'ND9NBK', '폐기', false, '개발', '2021-09-02', 1, 1);
 --
 -- INSERT INTO APPROVALS (APPROVER_ID, USER_ID, APPROVAL_INFO, REASON, CREATED_DATE) values (1, 1, '승인완료', 'test용', '2021-08-01');
@@ -99,24 +99,161 @@ INSERT INTO device_tag (device_id, tag_id) values ('DIR-N-101', 2);
 INSERT INTO device_tag (device_id, tag_id) values ('DIR-N-201', 3);
 INSERT INTO device_tag (device_id, tag_id) values ('DIR-S-301', 4);
 
-INSERT INTO approvals (user_id, approval_info, reason, deadline)
-VALUES (2, '승인대기', '노트북 반납 요청', TIMESTAMP '2025-10-31 18:00:00');
+INSERT INTO approvals (id, approval_info, reason, deadline)
+VALUES (1, '승인대기', '노트북 반납 요청', TIMESTAMP '2025-10-31 18:00:00');
 INSERT INTO approval_devices (id, device_id, img, type, project_id)
 VALUES (1, 'DIR-N-201', 'notebook.png', '반납', 2);
 
-INSERT INTO approvals (user_id, approval_info, reason, deadline)
-VALUES (3, '1차승인완료', '테스트 서버 대여 요청', TIMESTAMP '2025-11-05 09:00:00');
+INSERT INTO approvals (id, approval_info, reason, deadline)
+VALUES (2, '1차승인완료', '테스트 서버 대여 요청', TIMESTAMP '2025-11-05 09:00:00');
 INSERT INTO approval_devices (id, device_id, img, type, project_id)
 VALUES (2, 'DIR-S-301', 'server.png', '대여', 3);
 
-INSERT INTO approver (user_id, approval_id, is_approved, step)
-VALUES (1, 1, false, 1);
-INSERT INTO approver (user_id, approval_id, is_approved, step)
-VALUES (3, 1, false, 2);
-INSERT INTO approver (user_id, approval_id, is_approved, step)
-VALUES (1, 2, true, 1);
-INSERT INTO approver (user_id, approval_id, is_approved, step)
-VALUES (2, 2, false, 2);
+INSERT INTO approver (approval_id, is_approved, step)
+VALUES (1, false, 1);
+INSERT INTO approver (approval_id, is_approved, step)
+VALUES (1, false, 2);
+INSERT INTO approver (approval_id, is_approved, step)
+VALUES (2, true, 1);
+INSERT INTO approver (approval_id, is_approved, step)
+VALUES (2, false, 2);
+
+-- Sample approval requests for pagination testing
+INSERT INTO approval_requests
+    (id, requester_name, requester_email, requester_external_id, category, status, title, reason,
+     submitted_at, due_date, completed_at, created_date, modified_date)
+VALUES
+    (101, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'PENDING', '장비 결재 샘플 101', '페이지네이션 테스트 101 - 반납 요청',
+     TIMESTAMP '2025-09-25 08:10:00', TIMESTAMP '2025-10-10 18:00:00', NULL, TIMESTAMP '2025-09-25 08:00:00', TIMESTAMP '2025-09-25 08:00:00'),
+    (102, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'PENDING', '장비 결재 샘플 102', '페이지네이션 테스트 102 - 대여 요청',
+     TIMESTAMP '2025-09-25 09:05:00', TIMESTAMP '2025-10-12 12:00:00', NULL, TIMESTAMP '2025-09-25 09:00:00', TIMESTAMP '2025-09-25 09:00:00'),
+    (103, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'PENDING', '장비 결재 샘플 103', '페이지네이션 테스트 103 - 신규 구매',
+     TIMESTAMP '2025-09-26 08:35:00', TIMESTAMP '2025-10-15 09:30:00', NULL, TIMESTAMP '2025-09-26 08:30:00', TIMESTAMP '2025-09-26 08:30:00'),
+    (104, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'PENDING', '장비 결재 샘플 104', '페이지네이션 테스트 104 - 사양 변경',
+     TIMESTAMP '2025-09-26 09:15:00', TIMESTAMP '2025-10-18 17:00:00', NULL, TIMESTAMP '2025-09-26 09:10:00', TIMESTAMP '2025-09-26 09:10:00'),
+    (105, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'PENDING', '장비 결재 샘플 105', '페이지네이션 테스트 105 - 복구 요청',
+     TIMESTAMP '2025-09-27 08:25:00', TIMESTAMP '2025-10-20 10:00:00', NULL, TIMESTAMP '2025-09-27 08:20:00', TIMESTAMP '2025-09-27 08:20:00'),
+    (106, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'IN_PROGRESS', '장비 결재 샘플 106', '페이지네이션 테스트 106 - 반납 진행중',
+     TIMESTAMP '2025-09-20 10:05:00', TIMESTAMP '2025-10-22 09:00:00', NULL, TIMESTAMP '2025-09-20 10:00:00', TIMESTAMP '2025-09-22 09:30:00'),
+    (107, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'IN_PROGRESS', '장비 결재 샘플 107', '페이지네이션 테스트 107 - 대여 진행중',
+     TIMESTAMP '2025-09-20 11:05:00', TIMESTAMP '2025-10-24 11:00:00', NULL, TIMESTAMP '2025-09-20 11:00:00', TIMESTAMP '2025-09-23 14:00:00'),
+    (108, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'IN_PROGRESS', '장비 결재 샘플 108', '페이지네이션 테스트 108 - 구매 진행중',
+     TIMESTAMP '2025-09-21 08:45:00', TIMESTAMP '2025-10-26 16:00:00', NULL, TIMESTAMP '2025-09-21 08:40:00', TIMESTAMP '2025-09-24 09:15:00'),
+    (109, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'IN_PROGRESS', '장비 결재 샘플 109', '페이지네이션 테스트 109 - 사양 변경 진행중',
+     TIMESTAMP '2025-09-21 09:55:00', TIMESTAMP '2025-10-28 15:30:00', NULL, TIMESTAMP '2025-09-21 09:50:00', TIMESTAMP '2025-09-24 16:45:00'),
+    (110, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'IN_PROGRESS', '장비 결재 샘플 110', '페이지네이션 테스트 110 - 복구 진행중',
+     TIMESTAMP '2025-09-22 10:25:00', TIMESTAMP '2025-10-30 13:15:00', NULL, TIMESTAMP '2025-09-22 10:20:00', TIMESTAMP '2025-09-25 11:10:00'),
+    (111, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'APPROVED', '장비 결재 샘플 111', '페이지네이션 테스트 111 - 반납 완료',
+     TIMESTAMP '2025-09-05 08:05:00', TIMESTAMP '2025-09-30 18:00:00', TIMESTAMP '2025-09-12 10:30:00', TIMESTAMP '2025-09-05 08:00:00', TIMESTAMP '2025-09-12 10:30:00'),
+    (112, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'APPROVED', '장비 결재 샘플 112', '페이지네이션 테스트 112 - 대여 완료',
+     TIMESTAMP '2025-09-04 09:15:00', TIMESTAMP '2025-09-25 14:00:00', TIMESTAMP '2025-09-10 11:45:00', TIMESTAMP '2025-09-04 09:10:00', TIMESTAMP '2025-09-10 11:45:00'),
+    (113, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'APPROVED', '장비 결재 샘플 113', '페이지네이션 테스트 113 - 구매 완료',
+     TIMESTAMP '2025-09-03 10:25:00', TIMESTAMP '2025-09-28 09:30:00', TIMESTAMP '2025-09-09 15:20:00', TIMESTAMP '2025-09-03 10:20:00', TIMESTAMP '2025-09-09 15:20:00'),
+    (114, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'APPROVED', '장비 결재 샘플 114', '페이지네이션 테스트 114 - 사양 변경 완료',
+     TIMESTAMP '2025-09-02 11:05:00', TIMESTAMP '2025-09-26 16:00:00', TIMESTAMP '2025-09-08 13:10:00', TIMESTAMP '2025-09-02 11:00:00', TIMESTAMP '2025-09-08 13:10:00'),
+    (115, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'APPROVED', '장비 결재 샘플 115', '페이지네이션 테스트 115 - 복구 완료',
+     TIMESTAMP '2025-09-01 09:35:00', TIMESTAMP '2025-09-24 17:15:00', TIMESTAMP '2025-09-07 14:40:00', TIMESTAMP '2025-09-01 09:30:00', TIMESTAMP '2025-09-07 14:40:00'),
+    (116, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'REJECTED', '장비 결재 샘플 116', '페이지네이션 테스트 116 - 반납 반려',
+     TIMESTAMP '2025-08-30 10:05:00', TIMESTAMP '2025-09-20 09:00:00', TIMESTAMP '2025-09-04 15:45:00', TIMESTAMP '2025-08-30 10:00:00', TIMESTAMP '2025-09-04 15:45:00'),
+    (117, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'REJECTED', '장비 결재 샘플 117', '페이지네이션 테스트 117 - 대여 반려',
+     TIMESTAMP '2025-08-29 09:25:00', TIMESTAMP '2025-09-22 11:30:00', TIMESTAMP '2025-09-03 16:15:00', TIMESTAMP '2025-08-29 09:20:00', TIMESTAMP '2025-09-03 16:15:00'),
+    (118, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'REJECTED', '장비 결재 샘플 118', '페이지네이션 테스트 118 - 구매 반려',
+     TIMESTAMP '2025-08-28 08:55:00', TIMESTAMP '2025-09-24 14:45:00', TIMESTAMP '2025-09-02 13:05:00', TIMESTAMP '2025-08-28 08:50:00', TIMESTAMP '2025-09-02 13:05:00'),
+    (119, '박지현', 'manager@direa.co.kr', NULL, 'DEVICE', 'REJECTED', '장비 결재 샘플 119', '페이지네이션 테스트 119 - 사양 변경 반려',
+     TIMESTAMP '2025-08-27 09:45:00', TIMESTAMP '2025-09-26 16:20:00', TIMESTAMP '2025-09-01 17:25:00', TIMESTAMP '2025-08-27 09:40:00', TIMESTAMP '2025-09-01 17:25:00'),
+    (120, '이도현', 'approver@direa.co.kr', NULL, 'DEVICE', 'REJECTED', '장비 결재 샘플 120', '페이지네이션 테스트 120 - 복구 반려',
+     TIMESTAMP '2025-08-26 08:35:00', TIMESTAMP '2025-09-28 10:10:00', TIMESTAMP '2025-08-31 12:50:00', TIMESTAMP '2025-08-26 08:30:00', TIMESTAMP '2025-08-31 12:50:00');
+
+INSERT INTO approval_details (request_id) VALUES
+    (101),
+    (102),
+    (103),
+    (104),
+    (105),
+    (106),
+    (107),
+    (108),
+    (109),
+    (110),
+    (111),
+    (112),
+    (113),
+    (114),
+    (115),
+    (116),
+    (117),
+    (118),
+    (119),
+    (120);
+
+INSERT INTO device_approval_details
+    (request_id, device_id, action, attachment_url, requested_project_id, requested_department_id,
+     requested_real_user, requested_status, requested_purpose, memo)
+VALUES
+    (101, 'DIR-N-201', 'RETURN', 'notebook.png', 2, 1, '박지현', '반납대기', '장비 반납', '페이지네이션 테스트 샘플 101'),
+    (102, 'DIR-S-301', 'RENTAL', 'server.png', 3, 2, '테스트사용자A', '대여요청', '원격 데모', '페이지네이션 테스트 샘플 102'),
+    (103, 'DIR-N-201', 'PURCHASE', 'notebook.png', 4, 3, '테스트사용자B', '검토중', '신규 입사자', '페이지네이션 테스트 샘플 103'),
+    (104, 'DIR-N-201', 'MODIFY', 'notebook.png', 5, 4, '테스트사용자C', '변경대기', '성능 향상', '페이지네이션 테스트 샘플 104'),
+    (105, 'DIR-S-301', 'RECOVERY', 'server.png', 6, 5, '테스트사용자D', '복구대기', '테스트 환경', '페이지네이션 테스트 샘플 105'),
+    (106, 'DIR-N-201', 'RETURN', 'notebook.png', 7, 1, '테스트사용자E', '반납진행', '장비 회수', '페이지네이션 테스트 샘플 106'),
+    (107, 'DIR-N-201', 'RENTAL', 'notebook.png', 8, 2, '테스트사용자F', '대여중', '고객 지원', '페이지네이션 테스트 샘플 107'),
+    (108, 'DIR-S-301', 'PURCHASE', 'server.png', 9, 3, '테스트사용자G', '발주중', '장비 확충', '페이지네이션 테스트 샘플 108'),
+    (109, 'DIR-N-201', 'MODIFY', 'notebook.png', 10, 4, '테스트사용자H', '변경진행', '그래픽 작업', '페이지네이션 테스트 샘플 109'),
+    (110, 'DIR-S-301', 'RECOVERY', 'server.png', 11, 5, '테스트사용자I', '복구진행', '시스템 안정화', '페이지네이션 테스트 샘플 110'),
+    (111, 'DIR-N-201', 'RETURN', 'notebook.png', 2, 1, '테스트사용자J', '반납완료', '재고 정리', '페이지네이션 테스트 샘플 111'),
+    (112, 'DIR-S-301', 'RENTAL', 'server.png', 3, 2, '테스트사용자K', '대여종료', '현장 지원', '페이지네이션 테스트 샘플 112'),
+    (113, 'DIR-N-201', 'PURCHASE', 'notebook.png', 4, 3, '테스트사용자L', '입고완료', '연구 개발', '페이지네이션 테스트 샘플 113'),
+    (114, 'DIR-N-201', 'MODIFY', 'notebook.png', 5, 4, '테스트사용자M', '변경완료', '디자인 작업', '페이지네이션 테스트 샘플 114'),
+    (115, 'DIR-S-301', 'RECOVERY', 'server.png', 6, 5, '테스트사용자N', '복구완료', '서버 안정화', '페이지네이션 테스트 샘플 115'),
+    (116, 'DIR-N-201', 'RETURN', 'notebook.png', 7, 1, '테스트사용자O', '반납보류', '장비 점검', '페이지네이션 테스트 샘플 116'),
+    (117, 'DIR-N-201', 'RENTAL', 'notebook.png', 8, 2, '테스트사용자P', '대여보류', '장비 대여', '페이지네이션 테스트 샘플 117'),
+    (118, 'DIR-S-301', 'PURCHASE', 'server.png', 9, 3, '테스트사용자Q', '구매보류', '장비 교체', '페이지네이션 테스트 샘플 118'),
+    (119, 'DIR-N-201', 'MODIFY', 'notebook.png', 10, 4, '테스트사용자R', '변경보류', '그래픽 작업', '페이지네이션 테스트 샘플 119'),
+    (120, 'DIR-S-301', 'RECOVERY', 'server.png', 11, 5, '테스트사용자S', '복구보류', '서버 점검', '페이지네이션 테스트 샘플 120');
+
+INSERT INTO approval_steps
+    (id, request_id, approver_name, approver_email, approver_external_id, sequence_no, status, decided_at, comment, created_date, modified_date)
+VALUES
+    (1001, 101, '홍승민', 'admin@direa.co.kr', NULL, 1, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-25 08:00:00', TIMESTAMP '2025-09-25 08:00:00'),
+    (1002, 101, '이도현', 'approver@direa.co.kr', NULL, 2, 'PENDING', NULL, NULL, TIMESTAMP '2025-09-25 08:00:00', TIMESTAMP '2025-09-25 08:00:00'),
+    (1003, 102, '홍승민', 'admin@direa.co.kr', NULL, 1, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-25 09:00:00', TIMESTAMP '2025-09-25 09:00:00'),
+    (1004, 102, '박지현', 'manager@direa.co.kr', NULL, 2, 'PENDING', NULL, NULL, TIMESTAMP '2025-09-25 09:00:00', TIMESTAMP '2025-09-25 09:00:00'),
+    (1005, 103, '홍승민', 'admin@direa.co.kr', NULL, 1, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-26 08:30:00', TIMESTAMP '2025-09-26 08:30:00'),
+    (1006, 103, '이도현', 'approver@direa.co.kr', NULL, 2, 'PENDING', NULL, NULL, TIMESTAMP '2025-09-26 08:30:00', TIMESTAMP '2025-09-26 08:30:00'),
+    (1007, 104, '홍승민', 'admin@direa.co.kr', NULL, 1, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-26 09:10:00', TIMESTAMP '2025-09-26 09:10:00'),
+    (1008, 104, '박지현', 'manager@direa.co.kr', NULL, 2, 'PENDING', NULL, NULL, TIMESTAMP '2025-09-26 09:10:00', TIMESTAMP '2025-09-26 09:10:00'),
+    (1009, 105, '홍승민', 'admin@direa.co.kr', NULL, 1, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-27 08:20:00', TIMESTAMP '2025-09-27 08:20:00'),
+    (1010, 105, '이도현', 'approver@direa.co.kr', NULL, 2, 'PENDING', NULL, NULL, TIMESTAMP '2025-09-27 08:20:00', TIMESTAMP '2025-09-27 08:20:00'),
+    (1011, 106, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-22 09:30:00', '반납 승인', TIMESTAMP '2025-09-20 10:00:00', TIMESTAMP '2025-09-22 09:30:00'),
+    (1012, 106, '박지현', 'manager@direa.co.kr', NULL, 2, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-20 10:00:00', TIMESTAMP '2025-09-20 10:00:00'),
+    (1013, 107, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-23 14:00:00', '대여 승인', TIMESTAMP '2025-09-20 11:00:00', TIMESTAMP '2025-09-23 14:00:00'),
+    (1014, 107, '이도현', 'approver@direa.co.kr', NULL, 2, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-20 11:00:00', TIMESTAMP '2025-09-20 11:00:00'),
+    (1015, 108, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-24 09:15:00', '구매 승인', TIMESTAMP '2025-09-21 08:40:00', TIMESTAMP '2025-09-24 09:15:00'),
+    (1016, 108, '박지현', 'manager@direa.co.kr', NULL, 2, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-21 08:40:00', TIMESTAMP '2025-09-21 08:40:00'),
+    (1017, 109, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-24 16:45:00', '변경 승인', TIMESTAMP '2025-09-21 09:50:00', TIMESTAMP '2025-09-24 16:45:00'),
+    (1018, 109, '이도현', 'approver@direa.co.kr', NULL, 2, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-21 09:50:00', TIMESTAMP '2025-09-21 09:50:00'),
+    (1019, 110, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-25 11:10:00', '복구 승인', TIMESTAMP '2025-09-22 10:20:00', TIMESTAMP '2025-09-25 11:10:00'),
+    (1020, 110, '박지현', 'manager@direa.co.kr', NULL, 2, 'IN_PROGRESS', NULL, NULL, TIMESTAMP '2025-09-22 10:20:00', TIMESTAMP '2025-09-22 10:20:00'),
+    (1021, 111, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-08 09:00:00', '반납 승인 완료', TIMESTAMP '2025-09-05 08:00:00', TIMESTAMP '2025-09-08 09:00:00'),
+    (1022, 111, '이도현', 'approver@direa.co.kr', NULL, 2, 'APPROVED', TIMESTAMP '2025-09-12 10:30:00', '최종 승인 완료', TIMESTAMP '2025-09-05 08:00:00', TIMESTAMP '2025-09-12 10:30:00'),
+    (1023, 112, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-06 10:00:00', '대여 승인 완료', TIMESTAMP '2025-09-04 09:10:00', TIMESTAMP '2025-09-06 10:00:00'),
+    (1024, 112, '박지현', 'manager@direa.co.kr', NULL, 2, 'APPROVED', TIMESTAMP '2025-09-10 11:45:00', '최종 승인 완료', TIMESTAMP '2025-09-04 09:10:00', TIMESTAMP '2025-09-10 11:45:00'),
+    (1025, 113, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-05 09:40:00', '구매 승인 완료', TIMESTAMP '2025-09-03 10:20:00', TIMESTAMP '2025-09-05 09:40:00'),
+    (1026, 113, '이도현', 'approver@direa.co.kr', NULL, 2, 'APPROVED', TIMESTAMP '2025-09-09 15:20:00', '최종 승인 완료', TIMESTAMP '2025-09-03 10:20:00', TIMESTAMP '2025-09-09 15:20:00'),
+    (1027, 114, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-04 10:50:00', '변경 승인 완료', TIMESTAMP '2025-09-02 11:00:00', TIMESTAMP '2025-09-04 10:50:00'),
+    (1028, 114, '박지현', 'manager@direa.co.kr', NULL, 2, 'APPROVED', TIMESTAMP '2025-09-08 13:10:00', '최종 승인 완료', TIMESTAMP '2025-09-02 11:00:00', TIMESTAMP '2025-09-08 13:10:00'),
+    (1029, 115, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-03 09:20:00', '복구 승인 완료', TIMESTAMP '2025-09-01 09:30:00', TIMESTAMP '2025-09-03 09:20:00'),
+    (1030, 115, '이도현', 'approver@direa.co.kr', NULL, 2, 'APPROVED', TIMESTAMP '2025-09-07 14:40:00', '최종 승인 완료', TIMESTAMP '2025-09-01 09:30:00', TIMESTAMP '2025-09-07 14:40:00'),
+    (1031, 116, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-09-01 09:10:00', '반납 승인', TIMESTAMP '2025-08-30 10:00:00', TIMESTAMP '2025-09-01 09:10:00'),
+    (1032, 116, '박지현', 'manager@direa.co.kr', NULL, 2, 'REJECTED', TIMESTAMP '2025-09-04 15:45:00', '현장 확인 필요', TIMESTAMP '2025-08-30 10:00:00', TIMESTAMP '2025-09-04 15:45:00'),
+    (1033, 117, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-08-31 14:35:00', '대여 승인', TIMESTAMP '2025-08-29 09:20:00', TIMESTAMP '2025-08-31 14:35:00'),
+    (1034, 117, '이도현', 'approver@direa.co.kr', NULL, 2, 'REJECTED', TIMESTAMP '2025-09-03 16:15:00', '재고 부족', TIMESTAMP '2025-08-29 09:20:00', TIMESTAMP '2025-09-03 16:15:00'),
+    (1035, 118, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-08-30 09:25:00', '구매 승인', TIMESTAMP '2025-08-28 08:50:00', TIMESTAMP '2025-08-30 09:25:00'),
+    (1036, 118, '박지현', 'manager@direa.co.kr', NULL, 2, 'REJECTED', TIMESTAMP '2025-09-02 13:05:00', '예산 부족', TIMESTAMP '2025-08-28 08:50:00', TIMESTAMP '2025-09-02 13:05:00'),
+    (1037, 119, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-08-29 10:10:00', '변경 승인', TIMESTAMP '2025-08-27 09:40:00', TIMESTAMP '2025-08-29 10:10:00'),
+    (1038, 119, '이도현', 'approver@direa.co.kr', NULL, 2, 'REJECTED', TIMESTAMP '2025-09-01 17:25:00', '추가 검토 필요', TIMESTAMP '2025-08-27 09:40:00', TIMESTAMP '2025-09-01 17:25:00'),
+    (1039, 120, '홍승민', 'admin@direa.co.kr', NULL, 1, 'APPROVED', TIMESTAMP '2025-08-28 09:45:00', '복구 승인', TIMESTAMP '2025-08-26 08:30:00', TIMESTAMP '2025-08-28 09:45:00'),
+    (1040, 120, '박지현', 'manager@direa.co.kr', NULL, 2, 'REJECTED', TIMESTAMP '2025-08-31 12:50:00', '원인 재조사 필요', TIMESTAMP '2025-08-26 08:30:00', TIMESTAMP '2025-08-31 12:50:00');
 
 /*
 INSERT INTO "PUBLIC"."USERS" VALUES

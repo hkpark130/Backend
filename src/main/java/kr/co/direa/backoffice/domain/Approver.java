@@ -17,10 +17,6 @@ public class Approver extends BaseTimeEntity {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id")
-    private Users users;
-
-    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "approval_id")
     private Approvals approvals;
 
@@ -31,8 +27,7 @@ public class Approver extends BaseTimeEntity {
     private int step;
 
     @Builder
-    public Approver(Users users, Approvals approvals, Boolean isApproved, int step) {
-        this.users = users;
+    public Approver(Approvals approvals, Boolean isApproved, int step) {
         this.approvals = approvals;
         this.isApproved = isApproved;
         this.step = step;

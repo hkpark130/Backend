@@ -43,10 +43,10 @@ public class ApprovalDevices extends Approvals {
     private Departments tmpDepartment;
 
     @Builder
-    public ApprovalDevices(Long id, Users userId, String approvalInfo, String reason, List<Approver> approvers,
+    public ApprovalDevices(Long id, String approvalInfo, String reason, List<Approver> approvers,
                            Devices deviceId, String img, String type, LocalDateTime deadline,
                            Projects projectId, Projects tmpProject, Departments tmpDepartment) {
-        super(id, userId, approvalInfo, reason, approvers, deadline);
+        super(id, approvalInfo, reason, approvers, deadline);
         this.deviceId = deviceId;
         this.img = img;
         this.type = type;

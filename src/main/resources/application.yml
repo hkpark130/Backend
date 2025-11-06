@@ -1,19 +1,90 @@
 spring:
   application:
     name: backoffice-api
+  profiles:
+    default: local
+  ldap:
+    urls: "ldap://192.168.2.59:389"
+    base: "dc=direa,dc=co,dc=kr"
+    username: "cn=admin,dc=direa,dc=co,dc=kr"
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  devtools:
+    restart:
+      enabled: false
+
+server:
+  port: 80
+
+openstack:
+  auth:
+    url: "https://192.168.2.125:5000"
+    username: "admin"
+    domain: "admin_domain"
+    project:
+      id: "72faa4515e7843489ac23485dbf46d90"
+  neutron:
+    url: "https://192.168.2.124:9696"
+  nova:
+    url: "https://192.168.2.127:8774"
+  glance:
+    url: "https://192.168.2.130:9292"
+
+---
+jasypt:
+  encryptor:
+    password: mySecretKey
+
+constants:
+  keycloak-url: "https://keycloak.direa.synology.me"
+  realm: "sso"
+  admin: admin
+  admin-id: ENC(GYduUmkL2PMrquIkCbFBcV7lLDO49cBlKvwkeLNjOgxkK9qWVlCEO6dwfZwXrXhnfnFa16Hmspjk7omnEg/3RNiP1+jD0S3Gc0PX2RCWXX4=)
+  admin-pw: ENC(XqIJee3aZjwTRlzrG0Ecyhkx3vpbua9eYiIvgZPSkgwttaKlfoGO86HxXGbI4p/J)
+  admin-group-id: ENC(j264nBfm3L46eTho2ivWb6pLBRQ8zUAhru38+ld2p8YxB3aZTJzOWcqbre8NL8ZZvhWlBfNAZ6tt2fLa0YR63YZJU9M7QEsiEMfr6zuCXM8=)
+
+openstack:
+  auth:
+    password: ENC(4xzqRUqWEwzUCzFXGYTcHjNumS3CX7H6E8LW8uMncfs4SnLTmDnwG9W8x1hREqMHoPjduLWjZNtnqEYdOpputQ==)
+
+# Local profile: in-memory H2 DB, H2 console enabled, verbose SQL
+spring:
+  config:
+    activate:
+      on-profile: local
+  # datasource:
+  #   url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+  #   driver-class-name: org.h2.Driver
+  #   username: sa
+  #   password: ""
   datasource:
-    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
+    url: jdbc:mariadb://192.168.3.49:3306/infra_back_office
+    username: test
     password: ""
+    driver-class-name: org.mariadb.jdbc.Driver
+  ldap:
+    password: ENC(cbnH1YikINrN5I4tauqn8cmYziu4+mQKhAhD/331aRRoifCC/MKMXdxoQpru9NjW)
   jpa:
     hibernate:
       ddl-auto: update
     properties:
       hibernate:
+        session.events.log.LOG_QUERIES_SLOWER_THAN_MS: 5
         format_sql: true
+        default_batch_fetch_size: 1000
+        hbm2ddl:
+          charset_name: UTF-8
+          collation: utf8mb4_general_ci
     show-sql: true
-    defer-datasource-initialization: true
+    defer-datasource-initialization: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${constants.keycloak-url}/realms/${constants.realm}
+          jwk-set-uri: ${constants.keycloak-url}/realms/${constants.realm}/protocol/openid-connect/certs
   h2:
     console:
       enabled: true
@@ -32,7 +103,109 @@ spring:
   #           required: true
   #   default-encoding: UTF-8
 
+logging:
+  level:
+    org:
+      hibernate:
+        SQL_SLOW: info
+
 app:
   cors:
     allowed-origins:
       - http://localhost:5173
+  upload:
+    dir: uploads
+  keycloak:
+    url: https://keycloak.direa.synology.me
+    realm: sso
+    admin-client-id: admin-cli
+  ldap:
+    user-base: ${APP_LDAP_USER_BASE:cn=Users}
+    login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
+    password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
+  approval:
+    default-approvers:
+      - stage: 1
+        label: "1차 승인자"
+        username: "admin"
+        keycloak-id: ENC(GYduUmkL2PMrquIkCbFBcV7lLDO49cBlKvwkeLNjOgxkK9qWVlCEO6dwfZwXrXhnfnFa16Hmspjk7omnEg/3RNiP1+jD0S3Gc0PX2RCWXX4=)
+        display-name: "admin"
+        locked: true
+      - stage: 2
+        label: "2차 승인자"
+        username: "디리아"
+        keycloak-id: ENC(uc8nwXIYxjX/PKb6eiML1NVdL2Oh9IhlytjnEmytzsI/3TcF30wtkMZPtRDjU2F2R+S4jHkftmcamPEHNgkO3ayuMY5PQChkWFzxdx8dEdo=)
+        display-name: "디리아"
+        locked: true
+
+---
+jasypt:
+  encryptor:
+    password: ${JASYPT_KEY}
+
+constants:
+  keycloak-url: "https://keycloak.direa.synology.me"
+  realm: "sso"
+  admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
+  admin-id: ENC(RNu0pvdPsdYlgv4rJqH5rvYY55pIddi3gCSyTzutMRqo1DeqeNN+ukCsRIqPYoGd9EXaSxr20rYjHpm+hc+CvfpJ//0TgFjnoe5+JxtqcGY=)
+  admin-pw: ENC(9wsj63HOG5z6ursBEi7VzmwGMd/8jH/TyD1IRngtWqDvUvL04TtKPEFQxyIAY0OA)
+  admin-group-id: ENC(WmXJE0dvsIouiJP9uimG+4VciSGhTPusYQ/PCYBMItQwTtK0q5CNYrmdLCkuf5VNk/fTZC4E3TaWGcoAZMtKIVD30J15WSM+83YPygVJv8s=)
+
+# Prod profile: external DB, stricter JPA, no H2 console, minimal logs
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: ENC(m4NvP8vZdtRazN5Uq9QsBODtb09sOlfdXw9v+KbN/y/uLbIb2E6BrTJs1HEDOq6ZcU0Oj4AAIj3RkM1qGczUAxFhnjJLI9X3ofbIdZol6EEQTkD2qLbyz7/3KcEgGxgB0yuN5gLnfCUJqIQN1BIPPg==)
+    username: ENC(xfQIN2JCVUy9YElSP3OhPV8bkt7aP5u07nWszkIaGlOxeFNaBgIhEuclZua3YghAstbc172vvS3/gW/veb+IPQ==)
+    password: ENC(Uw1Q2bXdUWrJL7rBhOa5jsyURl4yMb8wldp/F0xJkprnjVzj3XIQbvDRAQ8Nlb7jAhUGyIAw57t77RZxvFG8SQ==)
+    driver-class-name: org.mariadb.jdbc.Driver
+  sql:
+    init:
+      mode: never
+  ldap:
+    password: ENC(1jwk9pXRQGcdTUnm/HMfinGjMUJEfSrmKDvLEVvPOBY9pqQSD9ebmLp+vmKTYR5I)
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: false
+        default_batch_fetch_size: 1000
+    show-sql: false
+    defer-datasource-initialization: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${constants.keycloak-url}/realms/${constants.realm}
+          jwk-set-uri: ${constants.keycloak-url}/realms/${constants.realm}/protocol/openid-connect/certs
+
+app:
+  cors:
+    allowed-origins:
+      - ${CORS_ALLOWED_ORIGINS:http://backoffice.direa.synology.me}
+  keycloak:
+    url: ${APP_KEYCLOAK_URL}
+    realm: ${APP_KEYCLOAK_REALM}
+    admin-client-id: ${APP_KEYCLOAK_ADMIN_CLIENT_ID}
+    admin-client-secret: ${APP_KEYCLOAK_ADMIN_CLIENT_SECRET}
+  ldap:
+    user-base: ${APP_LDAP_USER_BASE}
+    login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
+    password-length: ${APP_LDAP_PASSWORD_LENGTH:12}
+  approval:
+    default-approvers:
+      - stage: 1
+        label: "1차 승인자"
+        username: "신수인"
+        keycloak-id: ENC(Lhw6mV6tA2LLvA1z8/M8W4SiRIch5YgGxpzcI7iKrLLPdi2yx45HHqCoxP9xiUDAMZ49plYtDrcE2HGd/RwJbP56t2uvgz+kAiyA+UVKBkM=)
+        display-name: "신수인"
+        locked: true
+      - stage: 2
+        label: "2차 승인자"
+        username: "조고은"
+        keycloak-id: ENC(Sa6IPxNsvtnGcAqIsayqhmtpGhPMhZJYZ0XihhoCs20QuywkPUQ81VFGQFmXfDO5i7Uo1FdOwcdamU7EQCPcBl0qf3u4zJj8OCV5NDzQmT0=)
+        display-name: "조고은"
+        locked: true
