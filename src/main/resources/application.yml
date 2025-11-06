@@ -144,6 +144,7 @@ jasypt:
     password: ${JASYPT_KEY}
 
 constants:
+  frontend: "http://192.168.3.49:5173"
   keycloak-url: "https://keycloak.direa.synology.me"
   realm: "sso"
   admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
@@ -190,7 +191,6 @@ app:
     url: ${APP_KEYCLOAK_URL}
     realm: ${APP_KEYCLOAK_REALM}
     admin-client-id: ${APP_KEYCLOAK_ADMIN_CLIENT_ID}
-    admin-client-secret: ${APP_KEYCLOAK_ADMIN_CLIENT_SECRET}
   ldap:
     user-base: ${APP_LDAP_USER_BASE}
     login-shell: ${APP_LDAP_LOGIN_SHELL:/bin/bash}
