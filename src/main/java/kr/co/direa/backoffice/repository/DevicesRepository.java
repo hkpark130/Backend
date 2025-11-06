@@ -3,15 +3,21 @@ package kr.co.direa.backoffice.repository;
 import kr.co.direa.backoffice.domain.Categories;
 import kr.co.direa.backoffice.domain.Devices;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.lang.NonNull;
+import org.springframework.lang.Nullable;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface DevicesRepository extends JpaRepository<Devices, String> {
+public interface DevicesRepository extends JpaRepository<Devices, String>, JpaSpecificationExecutor<Devices> {
 
     Long countByCategoryIdAndIsUsable(Categories category, boolean isUsable);
 
@@ -22,6 +28,15 @@ public interface DevicesRepository extends JpaRepository<Devices, String> {
     })
     @Query("SELECT d FROM Devices d")
     List<Devices> findAllWithBasics();
+
+    @Override
+    @NonNull
+    @EntityGraph(attributePaths = {
+        "manageDep",
+        "categoryId",
+        "projectId"
+    })
+    Page<Devices> findAll(@Nullable Specification<Devices> spec, @NonNull Pageable pageable);
 
     @Query("SELECT d.id AS id, c.name AS categoryName, d.isUsable AS isUsable, d.status AS status "
         + "FROM Devices d LEFT JOIN d.categoryId c")

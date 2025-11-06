@@ -41,14 +41,18 @@ import kr.co.direa.backoffice.exception.CustomException;
 import kr.co.direa.backoffice.exception.code.CustomErrorCode;
 import kr.co.direa.backoffice.repository.ApprovalRequestRepository;
 import kr.co.direa.backoffice.repository.DeviceApprovalDetailRepository;
-import kr.co.direa.backoffice.repository.DeviceApprovalDetailRepository.DisposalStatusProjection;
 import kr.co.direa.backoffice.repository.DeviceTagRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository;
 import kr.co.direa.backoffice.repository.DevicesRepository.DeviceCategorySummary;
+import kr.co.direa.backoffice.repository.spec.DeviceSpecifications;
 import kr.co.direa.backoffice.vo.AdminDeviceSearchRequest;
 import kr.co.direa.backoffice.vo.DeviceSearchRequest;
 import kr.co.direa.backoffice.vo.MyDeviceSearchRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -613,75 +617,113 @@ public class DeviceService {
     }
 
     private PageResponse<DeviceDto> findAdminDevicesForLedger(AdminDeviceSearchRequest request, boolean disposedOnly) {
-        List<Devices> devices = devicesRepository.findAllWithBasics();
-        Map<String, DisposalStatusInfo> disposalStatusMap = loadDisposalStatusInfo();
-
-        List<DeviceSummary> baseSummaries = devices.stream()
-                .map(device -> DeviceSummary.from(device, disposalStatusMap.getOrDefault(device.getId(), DisposalStatusInfo.empty())))
-                .filter(summary -> disposedOnly ? includeInDisposalList(summary) : includeInAdminLedgerList(summary))
-                .toList();
-
-        return buildAdminDevicePage(baseSummaries, request, disposedOnly);
-    }
-
-    private PageResponse<DeviceDto> buildAdminDevicePage(List<DeviceSummary> baseList,
-                                                         AdminDeviceSearchRequest request,
-                                                         boolean disposedOnly) {
         AdminDeviceSearchRequest safeRequest = request == null
                 ? new AdminDeviceSearchRequest(1, 10, "categoryName", null, null, "categoryName", "asc")
                 : request;
 
-        String filterField = normalizeAdminFilterField(safeRequest.filterField());
-        String keyword = normalizeKeyword(safeRequest.keyword());
-        String filterValue = normalizeFilterValue(safeRequest.filterValue());
-        String sortField = normalizeAdminSortField(safeRequest.sortField());
-        boolean ascending = !"desc".equalsIgnoreCase(safeRequest.sortDirection());
+        AdminSearchContext context = toAdminSearchContext(safeRequest, disposedOnly);
 
-        List<DeviceSummary> filtered = baseList.stream()
-                .filter(summary -> matchesAdminFilterValue(summary, filterField, filterValue))
-                .filter(summary -> matchesAdminKeyword(summary, filterField, keyword))
-                .collect(Collectors.toList());
+        DeviceSpecifications.AdminDeviceSearchContext specContext =
+                new DeviceSpecifications.AdminDeviceSearchContext(
+                        context.filterField(),
+                        context.filterValue(),
+                        context.keyword(),
+                        context.disposedOnly());
 
-        Comparator<DeviceSummary> comparator = buildAdminComparator(sortField, ascending);
-        filtered.sort(comparator);
+        Sort sort = buildAdminSort(context.sortField(), context.ascending());
+        Pageable pageable = PageRequest.of(Math.max(context.page() - 1, 0), context.size(), sort);
 
-        int size = clampSize(safeRequest.size());
-        int totalElements = filtered.size();
-        int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / size));
-        int page = clampPage(safeRequest.page(), totalPages, totalElements);
-        int fromIndex = Math.min((page - 1) * size, totalElements);
-        int toIndex = Math.min(fromIndex + size, totalElements);
-        List<DeviceSummary> pageSummaries = filtered.subList(fromIndex, toIndex);
+        Page<Devices> devicePage = devicesRepository.findAll(DeviceSpecifications.adminSearch(specContext), pageable);
 
-        List<String> pageIds = pageSummaries.stream()
-                .map(DeviceSummary::id)
-                .filter(Objects::nonNull)
+        List<String> pageIds = devicePage.getContent().stream()
+                .map(Devices::getId)
+                .filter(id -> id != null && !id.isBlank())
                 .toList();
 
         Map<String, List<Map<String, Object>>> historyMap = pageIds.isEmpty()
                 ? Collections.emptyMap()
                 : buildHistoryMapByIds(new LinkedHashSet<>(pageIds));
 
-        List<Devices> detailedDevices = pageIds.isEmpty()
-                ? Collections.emptyList()
-                : devicesRepository.findAllWithDetailsByIdIn(new LinkedHashSet<>(pageIds));
-
-        Map<String, Devices> deviceMap = detailedDevices.stream()
-                .collect(Collectors.toMap(Devices::getId, Function.identity()));
+        Map<String, Devices> detailedDeviceMap = pageIds.isEmpty()
+                ? Collections.emptyMap()
+                : devicesRepository.findAllWithDetailsByIdIn(new LinkedHashSet<>(pageIds)).stream()
+                        .collect(Collectors.toMap(Devices::getId,
+                                Function.identity(),
+                                (existing, replacement) -> existing,
+                                LinkedHashMap::new));
 
         List<DeviceDto> content = new ArrayList<>();
-        for (DeviceSummary summary : pageSummaries) {
-            Devices device = deviceMap.get(summary.id());
-            if (device == null) {
+        for (Devices shallowDevice : devicePage.getContent()) {
+            if (shallowDevice == null || shallowDevice.getId() == null) {
                 continue;
             }
-            List<Map<String, Object>> history = historyMap.getOrDefault(summary.id(), Collections.emptyList());
-            content.add(toDeviceDto(device, history));
+            Devices detailed = detailedDeviceMap.getOrDefault(shallowDevice.getId(), shallowDevice);
+            List<Map<String, Object>> history = historyMap.getOrDefault(shallowDevice.getId(), Collections.emptyList());
+            content.add(toDeviceDto(detailed, history));
         }
 
-        Map<String, Object> metadata = buildAdminMetadata(baseList, disposedOnly);
+        List<DeviceSummary> metadataSource = loadAdminSummaries(disposedOnly);
+        Map<String, Object> metadata = buildAdminMetadata(metadataSource, disposedOnly);
 
-        return PageResponse.of(content, page, size, totalElements, totalPages, metadata);
+        int totalPages = Math.max(devicePage.getTotalPages(), 1);
+        return PageResponse.of(content,
+                context.page(),
+                context.size(),
+                devicePage.getTotalElements(),
+                totalPages,
+                metadata);
+    }
+
+    private AdminSearchContext toAdminSearchContext(AdminDeviceSearchRequest request, boolean disposedOnly) {
+        int size = clampSize(request.size());
+        int safePage = request.page() > 0 ? request.page() : 1;
+        String filterField = normalizeAdminFilterField(request.filterField());
+        String keyword = normalizeKeyword(request.keyword());
+        String filterValue = normalizeFilterValue(request.filterValue());
+        String sortField = normalizeAdminSortField(request.sortField());
+        boolean ascending = !"desc".equalsIgnoreCase(request.sortDirection());
+        return new AdminSearchContext(safePage, size, filterField, keyword, filterValue, sortField, ascending, disposedOnly);
+    }
+
+    private Sort buildAdminSort(String sortField, boolean ascending) {
+        Sort.Direction direction = ascending ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String property = switch (sortField) {
+            case "id" -> "id";
+            case "username" -> "realUser";
+            case "status" -> "status";
+            case "manageDepName" -> "manageDep.name";
+            case "projectName" -> "projectId.name";
+            case "purpose" -> "purpose";
+            case "company" -> "company";
+            case "model" -> "model";
+            case "description" -> "description";
+            case "purchaseDate" -> "purchaseDate";
+            case "price" -> "price";
+            default -> "categoryId.name";
+        };
+        return Sort.by(direction, property).and(Sort.by(Sort.Direction.ASC, "id"));
+    }
+
+    private List<DeviceSummary> loadAdminSummaries(boolean disposedOnly) {
+        DeviceSpecifications.AdminDeviceSearchContext specContext =
+                new DeviceSpecifications.AdminDeviceSearchContext(null, null, null, disposedOnly);
+        List<Devices> devices = devicesRepository.findAll(DeviceSpecifications.adminSearch(specContext));
+        if (devices.isEmpty()) {
+            return List.of();
+        }
+        return devices.stream()
+                .map(DeviceSummary::from)
+                .toList();
+    }
+
+    private record AdminSearchContext(int page,
+                                      int size,
+                                      String filterField,
+                                      String keyword,
+                                      String filterValue,
+                                      String sortField,
+                                      boolean ascending,
+                                      boolean disposedOnly) {
     }
 
     private Map<String, Object> buildAdminMetadata(List<DeviceSummary> baseList, boolean disposedOnly) {
@@ -726,11 +768,6 @@ public class DeviceService {
         return List.copyOf(unique);
     }
 
-    private Map<String, DisposalStatusInfo> loadDisposalStatusInfo() {
-        List<DisposalStatusProjection> rows = deviceApprovalDetailRepository.findDisposalStatusRows(DeviceApprovalAction.DISPOSAL);
-        return aggregateDisposalStatus(rows);
-    }
-
     @Transactional(readOnly = true)
     public Map<String, Long> findAvailableDeviceCountsByCategory() {
         List<DeviceCategorySummary> summaries = devicesRepository.findCategorySummaries();
@@ -764,79 +801,6 @@ public class DeviceService {
             categoryCounts.merge(categoryName, 1L, Long::sum);
         }
         return categoryCounts;
-    }
-
-    private Map<String, DisposalStatusInfo> aggregateDisposalStatus(List<DisposalStatusProjection> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return Collections.emptyMap();
-        }
-
-        Map<String, DisposalAccumulator> accumulatorMap = new HashMap<>();
-        for (DisposalStatusProjection row : rows) {
-            if (row == null || row.getDeviceId() == null || row.getDeviceId().isBlank()) {
-                continue;
-            }
-            String deviceId = row.getDeviceId();
-            DisposalAccumulator accumulator = accumulatorMap.computeIfAbsent(deviceId, id -> new DisposalAccumulator());
-
-            ApprovalStatus status = row.getStatus();
-            if (status == ApprovalStatus.PENDING || status == ApprovalStatus.IN_PROGRESS) {
-                accumulator.hasActive = true;
-            }
-
-            LocalDateTime createdDate = row.getCreatedDate();
-            if (createdDate == null) {
-                if (accumulator.latestCreatedDate == null && status == ApprovalStatus.APPROVED) {
-                    accumulator.latestApproved = true;
-                }
-                continue;
-            }
-
-            if (accumulator.latestCreatedDate == null || createdDate.isAfter(accumulator.latestCreatedDate)) {
-                accumulator.latestCreatedDate = createdDate;
-                accumulator.latestApproved = status == ApprovalStatus.APPROVED;
-            } else if (createdDate.equals(accumulator.latestCreatedDate) && status == ApprovalStatus.APPROVED) {
-                accumulator.latestApproved = true;
-            }
-        }
-
-        Map<String, DisposalStatusInfo> result = new HashMap<>();
-        for (Map.Entry<String, DisposalAccumulator> entry : accumulatorMap.entrySet()) {
-            DisposalAccumulator accumulator = entry.getValue();
-            result.put(entry.getKey(), new DisposalStatusInfo(accumulator.hasActive, accumulator.latestApproved));
-        }
-        return result;
-    }
-
-    private static final class DisposalAccumulator {
-        private boolean hasActive;
-        private LocalDateTime latestCreatedDate;
-        private boolean latestApproved;
-    }
-
-    private boolean includeInAdminLedgerList(DeviceSummary summary) {
-        if (summary == null) {
-            return false;
-        }
-        DisposalStatusInfo info = summary.disposalInfo();
-        if (info.latestApproved()) {
-            return false;
-        }
-        if (statusEquals(summary.status(), Constants.DISPOSE_TYPE)) {
-            return info.hasActive();
-        }
-        return true;
-    }
-
-    private boolean includeInDisposalList(DeviceSummary summary) {
-        if (summary == null) {
-            return false;
-        }
-        DisposalStatusInfo info = summary.disposalInfo();
-        if (statusEquals(summary.status(), Constants.DISPOSE_TYPE)) {
-            return !info.hasActive();
-        }
-        return info.latestApproved();
     }
 
     private String normalizeForFilter(String raw) {
@@ -891,95 +855,11 @@ public class DeviceService {
         };
     }
 
-    private boolean matchesAdminFilterValue(DeviceSummary summary, String filterField, String filterValue) {
-        if (filterValue == null || filterValue.isBlank()) {
-            return true;
-        }
-        String target = resolveAdminField(summary, filterField);
-        return filterValue.equals(target);
-    }
-
-    private boolean matchesAdminKeyword(DeviceSummary summary, String filterField, String keyword) {
-        if (keyword == null || keyword.isBlank()) {
-            return true;
-        }
-        String loweredKeyword = keyword.toLowerCase(Locale.ROOT);
-        if ("all".equals(filterField)) {
-            return Stream.of(
-                            summary.id(),
-                            summary.categoryName(),
-                            displayUser(summary),
-                            summary.status(),
-                            summary.manageDepName(),
-                            summary.projectName(),
-                            summary.purpose(),
-                            summary.company(),
-                            summary.model(),
-                            summary.description(),
-                summary.sn(),
-                            Optional.ofNullable(summary.purchaseDate()).map(this::formatPurchaseDate).orElse(null)
-                    )
-                    .filter(Objects::nonNull)
-                    .map(value -> value.toLowerCase(Locale.ROOT))
-                    .anyMatch(value -> value.contains(loweredKeyword));
-        }
-
-        String target = resolveAdminField(summary, filterField);
-        if (target == null || target.isBlank()) {
-            return false;
-        }
-        return target.toLowerCase(Locale.ROOT).contains(loweredKeyword);
-    }
-
-    private String resolveAdminField(DeviceSummary summary, String field) {
-        if (summary == null) {
-            return null;
-        }
-        return switch (field) {
-            case "id" -> summary.id();
-            case "username" -> displayUser(summary);
-            case "status" -> summary.status();
-            case "manageDepName" -> summary.manageDepName();
-            case "projectName" -> summary.projectName();
-            case "purpose" -> summary.purpose();
-            case "company" -> summary.company();
-            case "model" -> summary.model();
-            case "description" -> summary.description();
-            case "purchaseDate" -> summary.purchaseDate() != null ? formatPurchaseDate(summary.purchaseDate()) : null;
-            case "price" -> summary.price() != null ? summary.price().toString() : null;
-            default -> summary.categoryName();
-        };
-    }
-
     private String displayUser(DeviceSummary summary) {
         if (summary == null) {
             return null;
         }
         return normalizeForFilter(summary.realUser());
-    }
-
-    private Comparator<DeviceSummary> buildAdminComparator(String sortField, boolean ascending) {
-        Collator collator = Collator.getInstance(Locale.KOREAN);
-        collator.setStrength(Collator.PRIMARY);
-
-        Comparator<DeviceSummary> comparator;
-        if ("purchaseDate".equals(sortField)) {
-            comparator = Comparator.comparing(summary -> sortableDate(summary.purchaseDate()), Comparator.nullsLast(Long::compareTo));
-        } else if ("price".equals(sortField)) {
-            comparator = Comparator.comparing(DeviceSummary::price, Comparator.nullsLast(Long::compareTo));
-        } else {
-            comparator = Comparator.comparing(summary -> sortableString(resolveAdminField(summary, sortField)), Comparator.nullsLast(collator));
-        }
-
-        comparator = comparator.thenComparing(summary -> sortableString(summary.id()), Comparator.nullsLast(collator));
-
-        return ascending ? comparator : comparator.reversed();
-    }
-
-    private record DisposalStatusInfo(boolean hasActive, boolean latestApproved) {
-        static DisposalStatusInfo empty() {
-            return new DisposalStatusInfo(false, false);
-        }
     }
 
     private record LatestApprovalSnapshot(String deviceId,
@@ -1016,12 +896,11 @@ public class DeviceService {
                                  String status,
                                  String description,
                                  Long price,
-                                 String realUser,
-                                 DisposalStatusInfo disposalInfo) {
+                                 String realUser) {
 
-        static DeviceSummary from(Devices device, DisposalStatusInfo info) {
+        static DeviceSummary from(Devices device) {
             if (device == null) {
-                return new DeviceSummary(null, null, null, null, null, null, null, null, null, null, null, null, null, DisposalStatusInfo.empty());
+                return new DeviceSummary(null, null, null, null, null, null, null, null, null, null, null, null, null);
             }
             return new DeviceSummary(
                     device.getId(),
@@ -1036,8 +915,7 @@ public class DeviceService {
                     device.getStatus(),
                     device.getDescription(),
                     device.getPrice(),
-                    device.getRealUser(),
-                    info != null ? info : DisposalStatusInfo.empty()
+                    device.getRealUser()
             );
         }
     }
@@ -1045,24 +923,6 @@ public class DeviceService {
     private String sortableString(String value) {
         return normalizeForFilter(value);
     }
-
-    private Long sortableDate(java.util.Date date) {
-        if (date == null) {
-            return null;
-        }
-        return date.getTime();
-    }
-
-    private String formatPurchaseDate(java.util.Date date) {
-        if (date == null) {
-            return null;
-        }
-        return date.toInstant()
-                .atZone(java.time.ZoneId.systemDefault())
-                .toLocalDate()
-                .toString();
-    }
-
 
     @Transactional(readOnly = true)
     public PageResponse<DeviceDto> findDevicesForCurrentUser(MyDeviceSearchRequest request) {
@@ -1262,22 +1122,6 @@ public class DeviceService {
                 .map(ApprovalRequest::getStatus)
                 .filter(status -> status == ApprovalStatus.APPROVED)
                 .isPresent();
-    }
-
-    private boolean statusEquals(String status, String target) {
-        if (status == null || target == null) {
-            return false;
-        }
-        String normalizedStatus = normalizeStatusLabel(status);
-        String normalizedTarget = normalizeStatusLabel(target);
-        return normalizedStatus.equalsIgnoreCase(normalizedTarget);
-    }
-
-    private String normalizeStatusLabel(String status) {
-        if (status == null) {
-            return "";
-        }
-        return status.replaceAll("\\s+", "").trim();
     }
 
     private Set<String> resolveCurrentUserKeys() {
