@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>신청 승인 완료 안내</title>
+    <style>
+        body { font-family: "Noto Sans KR", Arial, sans-serif; background-color: #f6f7fb; margin: 0; padding: 24px; }
+        .container { max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 32px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+        h2 { margin-top: 0; color: #111827; }
+        p { line-height: 1.6; color: #374151; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+        th { width: 28%; color: #6b7280; font-weight: 600; background-color: #f9fafb; }
+        .cta { margin-top: 28px; display: inline-block; padding: 12px 18px; background-color: #059669; color: #ffffff; text-decoration: none; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>신청이 승인되었습니다</h2>
+        <p>[[${displayName}]] 님,</p>
+        <p>접수하신 신청이 최종 승인되었습니다. 아래 내용을 확인해 주세요.</p>
+        <table>
+            <tr><th>신청 번호</th><td>[[${approvalId}]]</td></tr>
+            <tr><th>신청 구분</th><td>[[${actionName}]]</td></tr>
+            <tr><th>신청 장비</th><td>[[${deviceId}]]</td></tr>
+            <tr><th>사용 기간</th><td>[[${usagePeriod}]]</td></tr>
+            <tr><th>요청 부서</th><td>[[${requestedDepartment}]]</td></tr>
+            <tr><th>요청 프로젝트</th><td>[[${requestedProject}]]</td></tr>
+            <tr><th>신청 사유</th><td>[[${reason}]]</td></tr>
+            <tr><th>등록 일시</th><td>[[${submittedAt}]]</td></tr>
+        </table>
+        <a class="cta" th:href="${link}" href="#" target="_blank" rel="noopener noreferrer">[[${linkLabel}]]</a>
+    </div>
+</body>
+</html>

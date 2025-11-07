@@ -14,6 +14,17 @@ spring:
   devtools:
     restart:
       enabled: false
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+    default-encoding: UTF-8
 
 server:
   port: 80
@@ -90,19 +101,9 @@ spring:
     console:
       enabled: true
       path: /h2-console
-  # mail:
-  #   host: smtp.gmail.com
-  #   port: 587
-  #   username: test-account@gmail.com
-  #   password: app-password-placeholder
-  #   properties:
-  #     mail:
-  #       smtp:
-  #         auth: true
-  #         starttls:
-  #           enable: true
-  #           required: true
-  #   default-encoding: UTF-8
+  mail:
+    username: ENC(uheYNjbNkDo99wWACIm90li/wlpe+OkqrxuD3Irf0LBmgNkgjevdknXdK9YEeAyS)
+    password: ENC(pkeEG5dglPMPRnS6kCEOTnDecr5po0+Ve/vpgmVoXZbm1D3sKyO4gqiau1R2LGBuB6xbvBeb47ktf6aGgrc6Ow==)
 
 logging:
   level:
@@ -132,12 +133,14 @@ app:
         keycloak-id: ENC(GYduUmkL2PMrquIkCbFBcV7lLDO49cBlKvwkeLNjOgxkK9qWVlCEO6dwfZwXrXhnfnFa16Hmspjk7omnEg/3RNiP1+jD0S3Gc0PX2RCWXX4=)
         display-name: "admin"
         locked: true
+        email: "hkpark@direa.co.kr"
       - stage: 2
         label: "2차 승인자"
         username: "디리아"
         keycloak-id: ENC(uc8nwXIYxjX/PKb6eiML1NVdL2Oh9IhlytjnEmytzsI/3TcF30wtkMZPtRDjU2F2R+S4jHkftmcamPEHNgkO3ayuMY5PQChkWFzxdx8dEdo=)
         display-name: "디리아"
         locked: true
+        email: "hkpark@direa.co.kr"
 
 ---
 jasypt:
@@ -145,7 +148,7 @@ jasypt:
     password: ${JASYPT_KEY}
 
 constants:
-  frontend: ${FRONTEND_URL:http://192.168.3.49:5173}
+  frontend: ${FRONTEND_URL:http://backoffice.direa.synology.me}
   keycloak-url: "https://keycloak.direa.synology.me"
   realm: "sso"
   admin: ENC(I1Fa58eRTCXabl7jgq6uT28LsTtmttVPhPBj/XkJnsI0Zzi0WRxf1EJuGTA56qFQ)
@@ -183,11 +186,14 @@ spring:
         jwt:
           issuer-uri: ${constants.keycloak-url}/realms/${constants.realm}
           jwk-set-uri: ${constants.keycloak-url}/realms/${constants.realm}/protocol/openid-connect/certs
+  mail:
+    username: ENC(fEeK6ltfo9RpRvW2hkveC/y8Y1/JvwibOC81mg4QnjBMCVp4r6mycuSHOum+GMXY)
+    password: ENC(fA1zN36AV+ZPRcstaPqJX52I5EQAcpCqieZO7d5Jvo/Fm9i9Q8VA/nQA1STLkT7BsJxmvGqufRsc+FVkbvHc4w==)
 
 app:
   cors:
     allowed-origins:
-      - ${CORS_ALLOWED_ORIGINS:http://backoffice.direa.synology.me}
+      - ${FRONTEND_URL:http://backoffice.direa.synology.me}
   upload:
     dir: uploads
   keycloak:
@@ -206,9 +212,11 @@ app:
         keycloak-id: ENC(Lhw6mV6tA2LLvA1z8/M8W4SiRIch5YgGxpzcI7iKrLLPdi2yx45HHqCoxP9xiUDAMZ49plYtDrcE2HGd/RwJbP56t2uvgz+kAiyA+UVKBkM=)
         display-name: "신수인"
         locked: true
+        email: "ssi1532@direa.co.kr"
       - stage: 2
         label: "2차 승인자"
         username: "조고은"
         keycloak-id: ENC(Sa6IPxNsvtnGcAqIsayqhmtpGhPMhZJYZ0XihhoCs20QuywkPUQ81VFGQFmXfDO5i7Uo1FdOwcdamU7EQCPcBl0qf3u4zJj8OCV5NDzQmT0=)
         display-name: "조고은"
         locked: true
+        email: "jke@direa.co.kr"

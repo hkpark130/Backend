@@ -96,14 +96,4 @@ public interface DevicesRepository extends JpaRepository<Devices, String>, JpaSp
     List<Devices> findByStatusNot(@Param("status") String status);
 
     List<Devices> findByIsUsableTrue();
-
-    interface DeviceCategorySummary {
-        String getId();
-
-        String getCategoryName();
-
-        Boolean getIsUsable();
-
-        String getStatus();
-    }
 }

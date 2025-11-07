@@ -46,6 +46,7 @@ public class LdapUserService {
     private final LdapTemplate ldapTemplate;
     private final LdapUserRepository ldapUserRepository;
     private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    private final MailService mailService;
 
     @Value("${spring.ldap.base:}")
     private String baseDn;
@@ -139,6 +140,7 @@ public class LdapUserService {
             log.error("Failed to reset password for {}", cn, ex);
             throw new CustomException(CustomErrorCode.LDAP_OPERATION_FAILED, "비밀번호 재발행에 실패했습니다.", ex);
         }
+        mailService.sendPasswordResetMail(cn, newPassword);
         return newPassword;
     }
 

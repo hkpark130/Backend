@@ -62,6 +62,7 @@ public class ApprovalDeviceService {
     private final ApprovalProperties approvalProperties;
     private final DeviceApprovalDetailRepository deviceApprovalDetailRepository;
     private final TagsService tagsService;
+    private final MailService mailService;
 
     @Transactional
     public ApprovalDeviceDto submitApplication(DeviceApplicationRequestDto request) {
@@ -237,7 +238,7 @@ public class ApprovalDeviceService {
             approvalCommentService.addComment(approvalId, normalizedApproverUsername, reason);
         }
 
-        notifyApplicantOnRejection(approval, approverInfo, normalizedApproverUsername);
+    notifyApplicantOnRejection(approval, approverInfo, normalizedApproverUsername, reason);
 
         return new ApprovalDeviceDto(approvalRequestRepository.save(approval));
     }
@@ -462,6 +463,13 @@ public class ApprovalDeviceService {
         }
 
         ApprovalRequest saved = approvalRequestRepository.save(approval);
+        saved.getSteps().stream()
+            .filter(step -> step.getSequence() == 1)
+            .findFirst()
+            .ifPresent(step -> mailService.sendApprovalUpdatedMail(
+                saved,
+                step,
+                buildApprovalLink(saved.getId(), LinkAudience.APPROVER)));
         return new ApprovalDeviceDto(saved);
     }
 
@@ -934,48 +942,55 @@ public class ApprovalDeviceService {
     }
 
     private void notifyApprover(ApprovalRequest approval, ApprovalStep step, String message) {
-    String targetReceiver = Optional.ofNullable(step.getApproverName())
-        .filter(name -> !name.isBlank())
-        .orElse(null);
+        String targetReceiver = Optional.ofNullable(step.getApproverName())
+            .filter(name -> !name.isBlank())
+            .orElse(null);
         if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
         String subjectPrefix = (message != null && !message.isBlank()) ? message : "[장비 결재 요청]";
         String subject = subjectPrefix + " " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetReceiver, subject,
-    Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId(), LinkAudience.APPROVER));
+        String link = buildApprovalLink(approval.getId(), LinkAudience.APPROVER);
+        notificationService.createNotification(targetReceiver, subject,
+            Constants.NOTIFICATION_APPROVAL, link);
+        mailService.sendApprovalAwaitingMail(approval, step, link, message);
     }
 
     private void notifyApplicantOnCompletion(ApprovalRequest approval) {
-    String targetReceiver = Optional.ofNullable(approval.getRequesterName())
-        .filter(name -> !name.isBlank())
-        .orElse(null);
+        String targetReceiver = Optional.ofNullable(approval.getRequesterName())
+            .filter(name -> !name.isBlank())
+            .orElse(null);
         if (targetReceiver == null || targetReceiver.isBlank()) {
             return;
         }
         String subject = "[장비 결재 완료] " + buildApprovalSubject(approval);
-    notificationService.createNotification(targetReceiver, subject,
-    Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId(), LinkAudience.APPLICANT));
+        String link = buildApprovalLink(approval.getId(), LinkAudience.APPLICANT);
+        notificationService.createNotification(targetReceiver, subject,
+            Constants.NOTIFICATION_APPROVAL, link);
+        mailService.sendApprovalCompletedMail(approval, link);
     }
 
     private void notifyApplicantOnRejection(ApprovalRequest approval,
                                             CommonLookupService.KeycloakUserInfo approverInfo,
-                                            String approverUsername) {
+                                            String approverUsername,
+                                            String rejectionReason) {
         String subject = "[장비 결재 반려] " + buildApprovalSubject(approval);
 
-    String requesterReceiver = Optional.ofNullable(approval.getRequesterName())
-        .filter(name -> !name.isBlank())
-        .orElse(null);
+        String requesterReceiver = Optional.ofNullable(approval.getRequesterName())
+            .filter(name -> !name.isBlank())
+            .orElse(null);
         if (requesterReceiver != null && !requesterReceiver.isBlank()) {
-        notificationService.createNotification(requesterReceiver, subject,
-            Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId(), LinkAudience.APPLICANT));
+            String link = buildApprovalLink(approval.getId(), LinkAudience.APPLICANT);
+            notificationService.createNotification(requesterReceiver, subject,
+                Constants.NOTIFICATION_APPROVAL, link);
+            mailService.sendApprovalRejectedMail(approval, rejectionReason, link);
         }
 
-    String approverReceiver = Optional.ofNullable(safeUsername(approverInfo, approverUsername))
-        .orElse(approverUsername);
-    if (approverReceiver != null && !approverReceiver.isBlank()) {
-        notificationService.createNotification(approverReceiver, subject,
-            Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId(), LinkAudience.APPROVER));
+        String approverReceiver = Optional.ofNullable(safeUsername(approverInfo, approverUsername))
+            .orElse(approverUsername);
+        if (approverReceiver != null && !approverReceiver.isBlank()) {
+            notificationService.createNotification(approverReceiver, subject,
+                Constants.NOTIFICATION_APPROVAL, buildApprovalLink(approval.getId(), LinkAudience.APPROVER));
         }
     }
 
@@ -1110,7 +1125,29 @@ public class ApprovalDeviceService {
             UUID stageUuid = stage.getKeycloakId();
             String resolvedUsername = firstNonBlank(stage.getUsername(), stage.getDisplayName(), normalized);
             String displayName = firstNonBlank(stage.getDisplayName(), stage.getUsername(), normalized);
-            return new CommonLookupService.KeycloakUserInfo(stageUuid, resolvedUsername, null, displayName);
+            String stageEmail = stage.getEmail();
+            if (stageEmail != null && !stageEmail.isBlank()) {
+                return new CommonLookupService.KeycloakUserInfo(stageUuid, resolvedUsername, stageEmail.trim(), displayName);
+            }
+
+            CommonLookupService.KeycloakUserInfo infoById = stageUuid != null
+                    ? commonLookupService.resolveKeycloakUserInfoById(stageUuid).orElse(null)
+                    : null;
+            if (infoById != null && infoById.email() != null && !infoById.email().isBlank()) {
+                return infoById;
+            }
+
+            String stageUsername = stage.getUsername();
+            if (stageUsername != null && !stageUsername.isBlank()) {
+                CommonLookupService.KeycloakUserInfo infoByUsername = commonLookupService.resolveKeycloakUserInfoByUsername(stageUsername.trim())
+                        .orElse(null);
+                if (infoByUsername != null) {
+                    return infoByUsername;
+                }
+            }
+
+            return commonLookupService.resolveKeycloakUserInfoByUsername(normalized)
+                    .orElseGet(() -> commonLookupService.fallbackUserInfo(resolvedUsername));
         }
 
         return commonLookupService.resolveKeycloakUserInfoByUsername(normalized)

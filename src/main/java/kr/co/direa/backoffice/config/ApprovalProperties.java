@@ -24,6 +24,7 @@ public class ApprovalProperties {
         private String username;
         private UUID keycloakId;
         private String displayName;
+        private String email;
         private boolean locked = true;
     }
 }

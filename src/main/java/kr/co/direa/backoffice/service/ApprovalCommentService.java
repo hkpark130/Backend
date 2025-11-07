@@ -1,10 +1,12 @@
 package kr.co.direa.backoffice.service;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 
 import kr.co.direa.backoffice.constant.Constants;
@@ -29,6 +31,7 @@ public class ApprovalCommentService {
 	private final ApprovalRequestRepository approvalRequestRepository;
 	private final NotificationService notificationService;
 	private final CommonLookupService commonLookupService;
+	private final MailService mailService;
 	// private final MailService mailService; // Mail sending disabled during local development
 
 	@Transactional
@@ -103,10 +106,20 @@ public class ApprovalCommentService {
 		Optional.ofNullable(approval.getRequesterName())
 			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::add);
+		Optional.ofNullable(approval.getRequesterExternalId())
+			.flatMap(commonLookupService::resolveKeycloakUserInfoById)
+			.map(info -> safeUsername(info, info != null ? info.username() : null))
+			.filter(name -> name != null && !name.isBlank())
+			.ifPresent(receivers::add);
 
 		if (approval.getSteps() != null) {
 			for (ApprovalStep step : approval.getSteps()) {
 				Optional.ofNullable(step.getApproverName())
+					.filter(name -> name != null && !name.isBlank())
+					.ifPresent(receivers::add);
+				Optional.ofNullable(step.getApproverExternalId())
+					.flatMap(commonLookupService::resolveKeycloakUserInfoById)
+					.map(info -> safeUsername(info, step.getApproverName()))
 					.filter(name -> name != null && !name.isBlank())
 					.ifPresent(receivers::add);
 			}
@@ -115,11 +128,19 @@ public class ApprovalCommentService {
 		Optional.ofNullable(comment.getAuthorName())
 			.filter(name -> name != null && !name.isBlank())
 			.ifPresent(receivers::remove);
+		Optional.ofNullable(comment.getAuthorExternalId())
+			.flatMap(commonLookupService::resolveKeycloakUserInfoById)
+			.map(info -> safeUsername(info, comment.getAuthorName()))
+			.filter(name -> name != null && !name.isBlank())
+			.ifPresent(receivers::remove);
 
+		Map<String, String> receiverLinks = new HashMap<>();
 		for (String receiver : receivers) {
 			String link = buildCommentLinkForReceiver(approval, receiver);
+			receiverLinks.put(receiver, link);
 			notificationService.createNotification(receiver, subject, Constants.COMMENT_TYPE, link);
 		}
+		mailService.sendApprovalCommentMail(approval, comment, receiverLinks);
 	}
 
 	private String buildCommentLinkForReceiver(ApprovalRequest approval, String receiver) {
