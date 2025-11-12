@@ -57,6 +57,9 @@ public enum CustomErrorCode {
     LDAP_USER_NOT_FOUND(HttpStatus.NOT_FOUND, "LDAP-004", "사용자를 찾을 수 없습니다."),
     LDAP_OPERATION_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "LDAP-005", "LDAP 작업을 처리하지 못했습니다."),
 
+    OPENSTACK_INSTANCE_NOT_FOUND(HttpStatus.NOT_FOUND, "OSK-001", "플로팅 IP에 해당하는 인스턴스를 찾을 수 없습니다."),
+    OPENSTACK_REQUEST_FAILED(HttpStatus.BAD_GATEWAY, "OSK-002", "OpenStack 요청 처리 중 오류가 발생했습니다."),
+
     COMMON_BAD_REQUEST(HttpStatus.BAD_REQUEST, "COM-001", "잘못된 요청입니다."),
     COMMON_NOT_FOUND(HttpStatus.NOT_FOUND, "COM-002", "요청한 리소스를 찾을 수 없습니다."),
     COMMON_CONFLICT(HttpStatus.CONFLICT, "COM-003", "요청을 처리할 수 없습니다."),

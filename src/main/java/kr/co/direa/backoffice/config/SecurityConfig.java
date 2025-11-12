@@ -35,6 +35,7 @@ public class SecurityConfig {
             "/api/available-devicelist",
             "/api/available-devices/counts",
             "/api/device/*",
+            "/api/openstack/instance-by-floating-ip",
             "/uploads/**",
     };
 

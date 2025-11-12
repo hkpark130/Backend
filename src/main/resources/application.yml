@@ -156,6 +156,10 @@ constants:
   admin-pw: ENC(9wsj63HOG5z6ursBEi7VzmwGMd/8jH/TyD1IRngtWqDvUvL04TtKPEFQxyIAY0OA)
   admin-group-id: ENC(WmXJE0dvsIouiJP9uimG+4VciSGhTPusYQ/PCYBMItQwTtK0q5CNYrmdLCkuf5VNk/fTZC4E3TaWGcoAZMtKIVD30J15WSM+83YPygVJv8s=)
 
+openstack:
+  auth:
+    password: ENC(LhBEDAouG8EcyXKYUEQIzRafh37wwnKNb+Kuy6+1IxphMZ662x+Uerl5mmElzheNcuS3go8IT8zfQa34+7+JoQ==)
+
 # Prod profile: external DB, stricter JPA, no H2 console, minimal logs
 spring:
   config:
