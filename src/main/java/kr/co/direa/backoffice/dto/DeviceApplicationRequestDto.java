@@ -51,5 +51,7 @@ public class DeviceApplicationRequestDto {
         private String projectCode;
         private String realUser;
         private String realUserMode;
+        private String status;
+        private List<String> tags = new ArrayList<>();
     }
 }

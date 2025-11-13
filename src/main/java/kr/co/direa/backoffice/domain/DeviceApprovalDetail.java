@@ -195,6 +195,7 @@ public class DeviceApprovalDetail extends ApprovalDetail {
                     Optional.ofNullable(requestedProject).map(Projects::getCode).orElse(null),
                     requestedDepartment,
                     Optional.ofNullable(requestedDepartment).map(Departments::getName).orElse(null),
+                    requestedStatus,
                     requestedRealUser,
                     RealUserMode.AUTO);
             return Map.of(device.getId(), fallback);
@@ -212,6 +213,7 @@ public class DeviceApprovalDetail extends ApprovalDetail {
                     item.getRequestedProjectCode(),
                     item.getRequestedDepartment(),
                     item.getRequestedDepartmentName(),
+                    item.getRequestedStatus(),
                     item.getRequestedRealUser(),
                     Optional.ofNullable(item.getRequestedRealUserMode()).orElse(RealUserMode.AUTO)));
         }
@@ -229,6 +231,7 @@ public class DeviceApprovalDetail extends ApprovalDetail {
                 item.getRequestedProjectCode(),
                 item.getRequestedDepartment(),
                 item.getRequestedDepartmentName(),
+                item.getRequestedStatus(),
                 item.getRequestedRealUser(),
                 Optional.ofNullable(item.getRequestedRealUserMode()).orElse(RealUserMode.AUTO));
     }
@@ -262,15 +265,21 @@ public class DeviceApprovalDetail extends ApprovalDetail {
             override = overrides.get(primary.getId());
         }
 
+        String normalizedStatus = null;
+
         if (override != null) {
             this.requestedProject = override.project();
             this.requestedDepartment = override.department();
             this.requestedRealUser = normalizeRealUser(override.realUser());
+            normalizedStatus = normalizeStatus(override.status());
         } else {
             this.requestedProject = firstItem.getRequestedProject();
             this.requestedDepartment = firstItem.getRequestedDepartment();
             this.requestedRealUser = normalizeRealUser(firstItem.getRequestedRealUser());
+            normalizedStatus = normalizeStatus(firstItem.getRequestedStatus());
         }
+
+        this.requestedStatus = normalizedStatus;
     }
 
     private String normalizeRealUser(String realUser) {
@@ -281,12 +290,21 @@ public class DeviceApprovalDetail extends ApprovalDetail {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    private String normalizeStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        String trimmed = status.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     public record RequestedOverrides(
             Projects project,
             String projectName,
             String projectCode,
             Departments department,
             String departmentName,
+            String status,
             String realUser,
             RealUserMode realUserMode) {
     }

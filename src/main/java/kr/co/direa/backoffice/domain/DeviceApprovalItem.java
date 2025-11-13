@@ -47,6 +47,9 @@ public class DeviceApprovalItem {
     @Column(name = "device_snapshot_purpose", length = 255)
     private String deviceSnapshotPurpose;
 
+    @Column(name = "requested_status", length = 50)
+    private String requestedStatus;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "requested_project_id")
     private Projects requestedProject;
@@ -77,6 +80,7 @@ public class DeviceApprovalItem {
         item.setDevice(device);
         item.setDeviceSnapshotStatus(device != null ? device.getStatus() : null);
         item.setDeviceSnapshotPurpose(device != null ? device.getPurpose() : null);
+        item.setRequestedStatus(device != null ? device.getStatus() : null);
         return item;
     }
 
@@ -84,6 +88,12 @@ public class DeviceApprovalItem {
     if (overrides == null) {
         return;
     }
+
+    String status = Optional.ofNullable(overrides.status())
+        .map(String::trim)
+        .filter(value -> !value.isEmpty())
+        .orElse(null);
+    setRequestedStatus(status);
 
     setRequestedProject(overrides.project());
     String projectName = Optional.ofNullable(overrides.projectName())

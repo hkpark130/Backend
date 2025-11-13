@@ -107,9 +107,20 @@ public class ApprovalDeviceService {
 
         validateDuplicateDeviceAction(targetDevices, action);
 
+        Map<String, DeviceApplicationRequestDto.DeviceSelection> perDeviceSelections =
+                toDeviceSelectionMap(request.getDevices());
+        List<String> defaultReturnTags = sanitizeTags(request.getTag());
+
         if (action == DeviceApprovalAction.RETURN) {
             for (Devices device : targetDevices) {
-                tagsService.replaceDeviceTags(device, request.getTag());
+                if (device == null || device.getId() == null) {
+                    continue;
+                }
+                DeviceApplicationRequestDto.DeviceSelection selection = perDeviceSelections.get(device.getId());
+                List<String> resolvedTags = (selection == null)
+                        ? defaultReturnTags
+                        : sanitizeTags(selection.getTags());
+                tagsService.replaceDeviceTags(device, resolvedTags);
             }
         }
 
@@ -146,21 +157,29 @@ public class ApprovalDeviceService {
                 request,
                 requestedProject,
                 requestedDepartment,
-                defaultRealUser);
+                defaultRealUser,
+                perDeviceSelections);
 
-        applyDeviceStateOnSubmission(targetDevices, request, action, requestedOverrides);
+        applyDeviceStateOnSubmission(targetDevices, request, action, perDeviceSelections, requestedOverrides);
 
+        String primaryDeviceId = uniqueDeviceIds.isEmpty() ? null : uniqueDeviceIds.iterator().next();
         DeviceApprovalDetail detail = DeviceApprovalDetail.create();
         detail.setAction(action);
         detail.setAttachmentUrl(request.getImg());
-        detail.setRequestedStatus(request.getDeviceStatus());
+        DeviceApplicationRequestDto.DeviceSelection primarySelection = primaryDeviceId != null
+                ? perDeviceSelections.get(primaryDeviceId)
+                : null;
+        String requestedStatus = firstNonBlank(
+                primarySelection != null ? primarySelection.getStatus() : null,
+                request.getDeviceStatus(),
+                request.getStatus());
+        detail.setRequestedStatus(requestedStatus);
         detail.setRequestedPurpose(request.getDevicePurpose());
         detail.setRequestedUsageStartDate(request.getUsageStartDate());
         detail.setRequestedUsageEndDate(request.getUsageEndDate());
         detail.setMemo(request.getDescription());
         detail.replaceDevices(targetDevices, requestedOverrides);
-        if (!uniqueDeviceIds.isEmpty()) {
-            String primaryDeviceId = uniqueDeviceIds.iterator().next();
+        if (primaryDeviceId != null) {
             DeviceApprovalDetail.RequestedOverrides primaryOverride = requestedOverrides.get(primaryDeviceId);
             if (primaryOverride != null) {
                 detail.setRequestedProject(primaryOverride.project());
@@ -524,6 +543,16 @@ public class ApprovalDeviceService {
         .map(ArrayList::new)
         .orElseGet(ArrayList::new));
 
+    Map<String, DeviceApplicationRequestDto.DeviceSelection> overrideSelections =
+        toDeviceSelectionMap(overrideSource.getDevices());
+
+    Map<String, List<String>> requestedTagsByDevice = new LinkedHashMap<>();
+    overrideSelections.forEach((deviceId, selection) -> {
+        List<String> sanitized = sanitizeTags(selection != null ? selection.getTags() : null);
+        requestedTagsByDevice.put(deviceId, sanitized);
+    });
+    List<String> fallbackReturnTags = sanitizeTags(updateRequest.getTags());
+
     String defaultRealUser = firstNonBlank(normalizedRealUser,
         detail.getRequestedRealUser(),
         approval.getRequesterName());
@@ -533,7 +562,8 @@ public class ApprovalDeviceService {
         overrideSource,
         requestedProject,
         requestedDepartment,
-        defaultRealUser);
+        defaultRealUser,
+        overrideSelections);
 
     if (!requestedOverrides.isEmpty()) {
         detail.applyRequestedOverrides(requestedOverrides);
@@ -550,11 +580,17 @@ public class ApprovalDeviceService {
         detail.setRequestedUsageStartDate(updateRequest.getUsageStartDate());
         detail.setRequestedUsageEndDate(updateRequest.getUsageEndDate());
 
-        if (detail.getAction() == DeviceApprovalAction.RETURN && updateRequest.getTags() != null) {
-            detail.resolveDevices().stream()
-                    .filter(Objects::nonNull)
-                    .forEach(device -> tagsService.replaceDeviceTags(device, updateRequest.getTags()));
-        }
+    if (detail.getAction() == DeviceApprovalAction.RETURN) {
+        detail.resolveDevices().stream()
+            .filter(device -> device != null && device.getId() != null)
+            .forEach(device -> {
+            String deviceId = device.getId();
+            List<String> specific = requestedTagsByDevice.containsKey(deviceId)
+                ? requestedTagsByDevice.get(deviceId)
+                : fallbackReturnTags;
+            tagsService.replaceDeviceTags(device, specific);
+            });
+    }
 
         ApprovalRequest saved = approvalRequestRepository.save(approval);
         saved.getSteps().stream()
@@ -889,6 +925,7 @@ public class ApprovalDeviceService {
     private void applyDeviceStateOnSubmission(List<Devices> devices,
                                               DeviceApplicationRequestDto request,
                                               DeviceApprovalAction action,
+                                              Map<String, DeviceApplicationRequestDto.DeviceSelection> selections,
                                               Map<String, DeviceApprovalDetail.RequestedOverrides> overrides) {
         if (devices == null || devices.isEmpty()) {
             return;
@@ -898,22 +935,28 @@ public class ApprovalDeviceService {
             if (device != null && overrides != null) {
                 override = overrides.get(device.getId());
             }
-            applyDeviceStateOnSubmission(device, request, action, override);
+            applyDeviceStateOnSubmission(device, request, action, selections, override);
         }
     }
 
     private void applyDeviceStateOnSubmission(Devices device,
                                               DeviceApplicationRequestDto request,
                                               DeviceApprovalAction action,
+                                              Map<String, DeviceApplicationRequestDto.DeviceSelection> selections,
                                               DeviceApprovalDetail.RequestedOverrides override) {
         if (action != DeviceApprovalAction.RENTAL && request.getIsUsable() != null) {
             device.setIsUsable(request.getIsUsable());
         }
 
-        if (action != DeviceApprovalAction.DISPOSAL
-                && request.getStatus() != null
-                && !request.getStatus().isBlank()) {
-            device.setStatus(request.getStatus());
+        if (device != null && action != DeviceApprovalAction.DISPOSAL) {
+            DeviceApplicationRequestDto.DeviceSelection selection = selections != null
+                    ? selections.get(device.getId())
+                    : null;
+            String perDeviceStatus = selection != null ? firstNonBlank(selection.getStatus()) : null;
+            String resolvedStatus = firstNonBlank(perDeviceStatus, request.getStatus(), request.getDeviceStatus());
+            if (resolvedStatus != null && !resolvedStatus.isBlank()) {
+                device.setStatus(resolvedStatus.trim());
+            }
         }
 
     String overrideRealUser = override != null ? override.realUser() : null;
@@ -939,19 +982,23 @@ public class ApprovalDeviceService {
             DeviceApplicationRequestDto request,
             Projects defaultProject,
             Departments defaultDepartment,
-            String defaultRealUser) {
+            String defaultRealUser,
+            Map<String, DeviceApplicationRequestDto.DeviceSelection> perDeviceSelections) {
         if (uniqueDeviceIds == null || uniqueDeviceIds.isEmpty()) {
             return Collections.emptyMap();
         }
 
-    Map<String, DeviceApplicationRequestDto.DeviceSelection> perDeviceSelections = toDeviceSelectionMap(request.getDevices());
+    Map<String, DeviceApplicationRequestDto.DeviceSelection> selections = perDeviceSelections != null
+        ? perDeviceSelections
+        : toDeviceSelectionMap(request.getDevices());
     RealUserMode defaultMode = Optional.ofNullable(request.getRealUserMode())
         .map(RealUserMode::fromKey)
         .orElse(RealUserMode.AUTO);
         Map<String, DeviceApprovalDetail.RequestedOverrides> result = new LinkedHashMap<>();
+        String defaultStatus = firstNonBlank(request.getStatus(), request.getDeviceStatus());
 
         for (String deviceId : uniqueDeviceIds) {
-            DeviceApplicationRequestDto.DeviceSelection selection = perDeviceSelections.get(deviceId);
+            DeviceApplicationRequestDto.DeviceSelection selection = selections.get(deviceId);
 
             Projects resolvedProject = resolveRequestedProject(selection, defaultProject);
             String requestedProjectName = firstNonBlank(
@@ -974,16 +1021,37 @@ public class ApprovalDeviceService {
                     ? firstNonBlank(manualRealUser, request.getRealUser())
                     : defaultRealUser;
 
+            String selectionStatus = selection != null ? selection.getStatus() : null;
+            String resolvedStatus = firstNonBlank(selectionStatus, defaultStatus);
+
             result.put(deviceId, new DeviceApprovalDetail.RequestedOverrides(
                     resolvedProject,
                     requestedProjectName,
                     requestedProjectCode,
                     resolvedDepartment,
                     requestedDepartmentName,
+                    resolvedStatus,
                     resolvedRealUser,
                     mode));
         }
         return result;
+    }
+
+    private List<String> sanitizeTags(List<String> rawTags) {
+        if (rawTags == null || rawTags.isEmpty()) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String tag : rawTags) {
+            if (tag == null) {
+                continue;
+            }
+            String trimmed = tag.trim();
+            if (!trimmed.isEmpty()) {
+                unique.add(trimmed);
+            }
+        }
+        return new ArrayList<>(unique);
     }
 
     private Map<String, DeviceApplicationRequestDto.DeviceSelection> toDeviceSelectionMap(
@@ -1138,8 +1206,16 @@ public class ApprovalDeviceService {
     private void applyRequestedAttributes(Devices device,
                                           DeviceApprovalDetail detail,
                                           DeviceApprovalItem detailItem) {
-        if (detail.getRequestedStatus() != null && !detail.getRequestedStatus().isBlank()) {
-            device.setStatus(detail.getRequestedStatus());
+        String requestedStatus = Optional.ofNullable(detailItem)
+                .map(DeviceApprovalItem::getRequestedStatus)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElseGet(() -> Optional.ofNullable(detail.getRequestedStatus())
+                        .map(String::trim)
+                        .filter(value -> !value.isEmpty())
+                        .orElse(null));
+        if (requestedStatus != null) {
+            device.setStatus(requestedStatus);
         }
         if (detail.getRequestedPurpose() != null && !detail.getRequestedPurpose().isBlank()) {
             device.setPurpose(detail.getRequestedPurpose());

@@ -20,10 +20,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @RestController
 @RequiredArgsConstructor
@@ -110,5 +113,16 @@ public class DeviceController {
     public ResponseEntity<?> bulkRegisterDevices(@RequestBody List<DeviceDto> deviceDtoList) {
         deviceService.bulkRegisterDevices(deviceDtoList);
         return ResponseEntity.ok("success");
+    }
+
+    @GetMapping("/devices/lookup")
+    public ResponseEntity<List<DeviceDto>> getDevicesByIds(@RequestParam(name = "ids") List<String> idParams) {
+        List<String> ids = idParams.stream()
+                .filter(Objects::nonNull)
+                .flatMap(raw -> Arrays.stream(raw.split(",")))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+        return ResponseEntity.ok(deviceService.findByIds(ids));
     }
 }

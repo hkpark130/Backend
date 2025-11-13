@@ -86,30 +86,60 @@ public interface DeviceApprovalDetailRepository extends JpaRepository<DeviceAppr
         + "WHERE dad.action = :action")
     List<DisposalStatusProjection> findDisposalStatusRows(@Param("action") DeviceApprovalAction action);
 
-        @Query(value = """
-                SELECT COALESCE(items.device_id, dad.device_id) AS device_id,
-                             dad.action,
-                             req.status,
-                             req.id AS request_id,
-                             req.due_date,
-                             req.created_date,
-                             req.requester_name,
-                             dad.requested_real_user
-                    FROM device_approval_details dad
-                    JOIN approval_details ad ON dad.request_id = ad.request_id
-                    JOIN approval_requests req ON req.id = ad.request_id
-                    LEFT JOIN device_approval_items items ON items.detail_id = dad.request_id
-                 WHERE COALESCE(items.device_id, dad.device_id) IN :deviceIds
-                     AND req.created_date = (
-                                SELECT MAX(req2.created_date)
-                                    FROM device_approval_details dad2
-                                    JOIN approval_details ad2 ON dad2.request_id = ad2.request_id
-                                    JOIN approval_requests req2 ON req2.id = ad2.request_id
-                                    LEFT JOIN device_approval_items items2 ON items2.detail_id = dad2.request_id
-                                 WHERE COALESCE(items2.device_id, dad2.device_id) = COALESCE(items.device_id, dad.device_id)
-                     )
-        """, nativeQuery = true)
-        List<Object[]> findLatestApprovalSnapshots(@Param("deviceIds") Collection<String> deviceIds);
+       @Query(value = """
+             SELECT ranked.device_id,
+                   ranked.action,
+                   ranked.status,
+                   ranked.request_id,
+                   ranked.due_date,
+                   ranked.created_date,
+                   ranked.requester_name,
+                   ranked.requested_real_user
+               FROM (
+                    SELECT source.device_id,
+                         source.action,
+                         source.status,
+                         source.request_id,
+                         source.due_date,
+                         source.created_date,
+                         source.requester_name,
+                         source.requested_real_user,
+                         ROW_NUMBER() OVER (PARTITION BY source.device_id ORDER BY source.created_date DESC, source.request_id DESC) AS rn
+                     FROM (
+                     SELECT items.device_id,
+                                dad.action,
+                                req.status,
+                                req.id AS request_id,
+                                req.due_date,
+                                req.created_date,
+                                req.requester_name,
+                                items.requested_real_user
+                            FROM device_approval_items items
+                            JOIN device_approval_details dad ON dad.request_id = items.detail_id
+                            JOIN approval_details ad ON dad.request_id = ad.request_id
+                            JOIN approval_requests req ON req.id = ad.request_id
+                           WHERE items.device_id IN :deviceIds
+                          UNION ALL
+                          SELECT dad.device_id,
+                                dad.action,
+                                req.status,
+                                req.id AS request_id,
+                                req.due_date,
+                                req.created_date,
+                                req.requester_name,
+                                dad.requested_real_user
+                            FROM device_approval_details dad
+                            JOIN approval_details ad ON dad.request_id = ad.request_id
+                            JOIN approval_requests req ON req.id = ad.request_id
+                           WHERE dad.device_id IN :deviceIds
+                            AND NOT EXISTS (
+                                SELECT 1 FROM device_approval_items items2 WHERE items2.detail_id = dad.request_id
+                            )
+                         ) source
+                   ) ranked
+              WHERE ranked.rn = 1
+       """, nativeQuery = true)
+       List<Object[]> findLatestApprovalSnapshots(@Param("deviceIds") Collection<String> deviceIds);
 
     interface DisposalStatusProjection {
         String getDeviceId();
