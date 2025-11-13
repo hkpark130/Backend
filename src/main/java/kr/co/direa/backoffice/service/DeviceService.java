@@ -156,32 +156,82 @@ public class DeviceService {
     }
 
     private List<DeviceDto> loadAvailableDeviceDtos() {
-        List<Devices> devices = devicesRepository.findAllWithDetails();
+    List<Devices> devices = devicesRepository.findAllWithDetails();
+
+    Map<String, LatestApprovalSnapshot> snapshotMap = loadLatestApprovalSnapshots(
+        devices.stream()
+            .map(Devices::getId)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(id -> !id.isEmpty())
+            .toList());
 
         List<Devices> availableDevices = devices.stream()
-                .filter(this::isDeviceAvailable)
-                .toList();
+        .filter(device -> {
+            String deviceId = Optional.ofNullable(device)
+                .map(Devices::getId)
+                .map(String::trim)
+                .orElse(null);
+            LatestApprovalSnapshot snapshot = deviceId != null ? snapshotMap.get(deviceId) : null;
+            return isDeviceVisibleInAvailableList(device, snapshot);
+        })
+        .toList();
 
-        Map<String, List<Map<String, Object>>> historyMap = buildHistoryMap(availableDevices);
+    Map<String, List<Map<String, Object>>> historyMap = buildHistoryMap(availableDevices);
 
     return availableDevices.stream()
-        .map(device -> toDeviceDto(device, historyMap.getOrDefault(device.getId(), Collections.emptyList())))
-                .toList();
+        .map(device -> {
+        String rawDeviceId = Optional.ofNullable(device)
+            .map(Devices::getId)
+            .orElse(null);
+        String normalizedId = Optional.ofNullable(rawDeviceId)
+            .map(String::trim)
+            .filter(id -> !id.isEmpty())
+            .orElse(null);
+    LatestApprovalSnapshot snapshot = normalizedId != null ? snapshotMap.get(normalizedId) : null;
+        List<Map<String, Object>> history = historyMap.getOrDefault(rawDeviceId, Collections.emptyList());
+        return toDeviceDto(device, snapshot, history);
+        })
+        .toList();
     }
 
     private DeviceDto toDeviceDto(Devices device) {
         if (device == null) {
             return null;
         }
-        return toDeviceDto(device, buildHistory(device.getId()));
+        return toDeviceDto(device, null, buildHistory(device.getId()));
     }
 
     private DeviceDto toDeviceDto(Devices device, List<Map<String, Object>> history) {
+        return toDeviceDto(device, null, history);
+    }
+
+    private DeviceDto toDeviceDto(Devices device,
+                                  LatestApprovalSnapshot snapshot,
+                                  List<Map<String, Object>> history) {
         if (device == null) {
             return null;
         }
         List<Map<String, Object>> safeHistory = history != null ? history : Collections.emptyList();
         DeviceDto dto = new DeviceDto(device, safeHistory);
+        if (snapshot != null) {
+            dto.setApprovalInfo(snapshot.statusDisplayName());
+            dto.setApprovalType(snapshot.actionDisplayName());
+            dto.setApprovalId(snapshot.requestId());
+            dto.setDeadline(snapshot.dueDate());
+            if (snapshot.assignsUser()) {
+                if (dto.getUsername() == null || dto.getUsername().isBlank()) {
+                    dto.setUsername(Optional.ofNullable(snapshot.requesterName())
+                            .filter(name -> !name.isBlank())
+                            .orElse(snapshot.requestedRealUser()));
+                }
+                if (dto.getRealUser() == null || dto.getRealUser().isBlank()) {
+                    dto.setRealUser(Optional.ofNullable(snapshot.requestedRealUser())
+                            .filter(name -> !name.isBlank())
+                            .orElse(dto.getUsername()));
+                }
+            }
+        }
         enrichDeviceUserProfile(device, dto);
         return dto;
     }
@@ -471,26 +521,105 @@ public class DeviceService {
         if (deviceIds == null || deviceIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        List<Object[]> rows = deviceApprovalDetailRepository.findLatestApprovalSnapshots(deviceIds);
-        Map<String, LatestApprovalSnapshot> result = new HashMap<>();
+        LinkedHashSet<String> targetIds = deviceIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (targetIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        List<Object[]> rows = deviceApprovalDetailRepository.findLatestApprovalSnapshots(targetIds);
+        Map<String, LatestApprovalSnapshot> result = new LinkedHashMap<>();
         for (Object[] row : rows) {
             if (row == null || row.length < 8) {
                 continue;
             }
-            String deviceId = row[0] != null ? row[0].toString() : null;
-            if (deviceId == null || deviceId.isBlank()) {
+
+            String deviceId = toStringValue(row[0]);
+            if (deviceId == null || deviceId.isEmpty()) {
                 continue;
             }
+            if (!targetIds.contains(deviceId) || result.containsKey(deviceId)) {
+                continue;
+            }
+
             DeviceApprovalAction action = toDeviceApprovalAction(row[1]);
             ApprovalStatus status = toApprovalStatus(row[2]);
             Long requestId = toLong(row[3]);
             LocalDateTime dueDate = toLocalDateTime(row[4]);
             LocalDateTime createdDate = toLocalDateTime(row[5]);
-            String requesterName = toStringSafe(row[6]);
-            String requestedRealUser = toStringSafe(row[7]);
+            String requesterName = toStringValue(row[6]);
+            String requestedRealUser = toStringValue(row[7]);
+
             result.put(deviceId, new LatestApprovalSnapshot(deviceId, action, status, requestId, dueDate, createdDate, requesterName, requestedRealUser));
         }
+
         return result;
+    }
+
+    private String toStringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private DeviceApprovalAction toDeviceApprovalAction(Object value) {
+        String text = toStringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return DeviceApprovalAction.valueOf(text);
+        } catch (IllegalArgumentException ignore) {
+            return DeviceApprovalAction.fromDisplayName(text);
+        }
+    }
+
+    private ApprovalStatus toApprovalStatus(Object value) {
+        String text = toStringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return ApprovalStatus.valueOf(text);
+        } catch (IllegalArgumentException ignore) {
+            return null;
+        }
+    }
+
+    private Long toLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String text = toStringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException ignore) {
+            return null;
+        }
+    }
+
+    private LocalDateTime toLocalDateTime(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        if (value instanceof java.sql.Timestamp ts) {
+            return ts.toLocalDateTime();
+        }
+        if (value instanceof java.util.Date date) {
+            return LocalDateTime.ofInstant(date.toInstant(), java.time.ZoneId.systemDefault());
+        }
+        return null;
     }
 
     private DeviceDto toMyDeviceDto(Devices device,
@@ -539,64 +668,6 @@ public class DeviceService {
             }
         }
         return dto;
-    }
-
-    private DeviceApprovalAction toDeviceApprovalAction(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof DeviceApprovalAction action) {
-            return action;
-        }
-        return DeviceApprovalAction.valueOf(value.toString());
-    }
-
-    private ApprovalStatus toApprovalStatus(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof ApprovalStatus status) {
-            return status;
-        }
-        return ApprovalStatus.valueOf(value.toString());
-    }
-
-    private Long toLong(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        try {
-            return Long.parseLong(value.toString());
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
-
-    private LocalDateTime toLocalDateTime(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof LocalDateTime localDateTime) {
-            return localDateTime;
-        }
-        if (value instanceof java.util.Date date) {
-            return date.toInstant().atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
-        }
-        if (value instanceof java.sql.Timestamp timestamp) {
-            return timestamp.toLocalDateTime();
-        }
-        return null;
-    }
-
-    private String toStringSafe(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String text = value.toString();
-        return text != null ? text.trim() : null;
     }
 
     private boolean containsIgnoreCase(String value, String keyword) {
@@ -787,8 +858,12 @@ public class DeviceService {
             if (summary == null || summary.getId() == null) {
                 continue;
             }
-            LatestApprovalSnapshot snapshot = snapshotMap.get(summary.getId());
-            if (!isDeviceAvailableBySnapshot(summary.getIsUsable(), snapshot)) {
+            String summaryId = Optional.ofNullable(summary.getId())
+                    .map(String::trim)
+                    .filter(id -> !id.isEmpty())
+                    .orElse(null);
+            LatestApprovalSnapshot snapshot = summaryId != null ? snapshotMap.get(summaryId) : null;
+            if (!isDeviceVisibleInAvailableList(summary.getIsUsable(), snapshot)) {
                 continue;
             }
             String categoryName = Optional.ofNullable(summary.getCategoryName())
@@ -950,15 +1025,15 @@ public class DeviceService {
                     buildEmptyMyDeviceMetadata());
         }
 
-    List<Devices> baseDevices = uniqueDevices.stream()
-        .filter(device -> !isHiddenByDisposalStatus(device))
-        .filter(device -> ownsDevice(device, usernameKeys, userUuid))
-        .toList();
+        List<Devices> baseDevices = uniqueDevices.stream()
+                .filter(device -> !isHiddenByDisposalStatus(device))
+                .filter(device -> ownsDevice(device, usernameKeys, userUuid))
+                .toList();
 
-    if (baseDevices.isEmpty()) {
-        return PageResponse.of(Collections.emptyList(), 1, clampSize(request.size()), 0, 1,
-            buildEmptyMyDeviceMetadata());
-    }
+        if (baseDevices.isEmpty()) {
+            return PageResponse.of(Collections.emptyList(), 1, clampSize(request.size()), 0, 1,
+                    buildEmptyMyDeviceMetadata());
+        }
 
         List<String> deviceIds = baseDevices.stream()
                 .map(Devices::getId)
@@ -968,10 +1043,11 @@ public class DeviceService {
         Map<String, LatestApprovalSnapshot> snapshotMap = loadLatestApprovalSnapshots(deviceIds);
         Map<String, List<String>> tagsMap = loadTagsByDeviceIds(deviceIds);
 
-        List<DeviceDto> dtoList = baseDevices.stream()
-                .map(device -> toMyDeviceDto(device,
-                        snapshotMap.get(device.getId()),
-                        tagsMap.getOrDefault(device.getId(), List.of())))
+    List<DeviceDto> dtoList = baseDevices.stream()
+        .map(device -> toMyDeviceDto(
+            device,
+            snapshotMap.get(device.getId()),
+            tagsMap.getOrDefault(device.getId(), List.of())))
                 .filter(this::includeInMyDevices)
                 .toList();
 
@@ -1190,6 +1266,37 @@ public class DeviceService {
         .orElseThrow(() -> new CustomException(CustomErrorCode.DEVICE_NOT_FOUND,
             "Device not found: " + id));
     return toDeviceDto(device);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DeviceDto> findByIds(Collection<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        LinkedHashSet<String> normalized = ids.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (normalized.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Devices> devices = devicesRepository.findAllById(normalized);
+        Map<String, Devices> deviceMap = devices.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(
+                        device -> Optional.ofNullable(device.getId()).orElse(""),
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new));
+
+        return normalized.stream()
+                .map(deviceMap::get)
+                .filter(Objects::nonNull)
+                .map(this::toDeviceDto)
+                .toList();
     }
 
     @Transactional
@@ -1728,37 +1835,14 @@ public class DeviceService {
         return left.equalsIgnoreCase(right);
     }
 
-    private boolean isDeviceAvailable(Devices device) {
-        Optional<DeviceApprovalDetail> latestDetail = findLatestDetail(device);
-        if (latestDetail.isEmpty()) {
-            return Boolean.TRUE.equals(device.getIsUsable());
-        }
-
-        DeviceApprovalDetail detail = latestDetail.get();
-        ApprovalRequest request = detail.getRequest();
-        DeviceApprovalAction action = detail.getAction();
-        ApprovalStatus status = request != null ? request.getStatus() : null;
-
-        boolean returnWaiting = action == DeviceApprovalAction.RETURN &&
-                (status == ApprovalStatus.PENDING
-                        || status == ApprovalStatus.IN_PROGRESS
-                        || status == ApprovalStatus.APPROVED);
-
-        boolean rentalPending = action == DeviceApprovalAction.RENTAL &&
-                (status == ApprovalStatus.PENDING || status == ApprovalStatus.IN_PROGRESS);
-        if (rentalPending) {
+    private boolean isDeviceVisibleInAvailableList(Devices device, LatestApprovalSnapshot snapshot) {
+        if (device == null) {
             return false;
         }
-
-        boolean rentalRejected = action == DeviceApprovalAction.RENTAL && status == ApprovalStatus.REJECTED;
-
-        return returnWaiting || rentalRejected || Boolean.TRUE.equals(device.getIsUsable());
+        return isDeviceVisibleInAvailableList(device.getIsUsable(), snapshot);
     }
 
-    private boolean isDeviceAvailableBySnapshot(Boolean isUsable, LatestApprovalSnapshot snapshot) {
-        if (isUsable == null && snapshot == null) {
-            return false;
-        }
+    private boolean isDeviceVisibleInAvailableList(Boolean isUsable, LatestApprovalSnapshot snapshot) {
         if (snapshot == null) {
             return Boolean.TRUE.equals(isUsable);
         }
@@ -1769,7 +1853,8 @@ public class DeviceService {
         boolean returnWaiting = action == DeviceApprovalAction.RETURN &&
                 (status == ApprovalStatus.PENDING
                         || status == ApprovalStatus.IN_PROGRESS
-                        || status == ApprovalStatus.APPROVED);
+                        || status == ApprovalStatus.APPROVED
+                        || status == null);
 
         boolean rentalPending = action == DeviceApprovalAction.RENTAL &&
                 (status == ApprovalStatus.PENDING || status == ApprovalStatus.IN_PROGRESS);
@@ -1833,15 +1918,24 @@ public class DeviceService {
 
         Map<String, List<DeviceApprovalDetail>> grouped = new LinkedHashMap<>();
         for (DeviceApprovalDetail detail : histories) {
-            if (detail == null || detail.getDevice() == null || detail.getDevice().getId() == null) {
+            if (detail == null) {
                 continue;
             }
-            String deviceId = detail.getDevice().getId();
-            List<DeviceApprovalDetail> bucket = grouped.computeIfAbsent(deviceId, id -> new ArrayList<>());
-            if (bucket.size() >= effectiveLimit) {
-                continue;
+            List<Devices> devices = detail.resolveDevices();
+            for (Devices device : devices) {
+                if (device == null || device.getId() == null) {
+                    continue;
+                }
+                String deviceId = device.getId();
+                if (!deviceIds.contains(deviceId)) {
+                    continue;
+                }
+                List<DeviceApprovalDetail> bucket = grouped.computeIfAbsent(deviceId, id -> new ArrayList<>());
+                if (bucket.size() >= effectiveLimit) {
+                    continue;
+                }
+                bucket.add(detail);
             }
-            bucket.add(detail);
         }
 
         Map<String, List<Map<String, Object>>> result = new LinkedHashMap<>();
@@ -1874,13 +1968,16 @@ public class DeviceService {
             map.put("username", requesterName.or(() -> operatorFromReason).orElse("알 수 없음"));
             operatorFromReason.ifPresent(value -> map.put("operatorUsername", value));
             map.put("reason", Optional.ofNullable(request).map(ApprovalRequest::getReason).orElse(detail.getMemo()));
-            map.put("type", Optional.ofNullable(detail.getAction()).map(DeviceApprovalAction::getDisplayName).orElse(null));
-            map.put("projectName", Optional.ofNullable(detail.getRequestedProject())
-                    .map(Projects::getName)
-                    .orElse(Optional.ofNullable(detail.getDevice())
-                            .map(Devices::getProjectId)
-                            .map(project -> project != null ? project.getName() : null)
-                            .orElse(null)));
+        map.put("type", Optional.ofNullable(detail.getAction()).map(DeviceApprovalAction::getDisplayName).orElse(null));
+        map.put("projectName", Optional.ofNullable(detail.getRequestedProject())
+            .map(Projects::getName)
+            .orElse(detail.resolveDevices().stream()
+                .map(Devices::getProjectId)
+                .filter(Objects::nonNull)
+                .map(Projects::getName)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null)));
             map.put("modifiedDate", Optional.ofNullable(request).map(ApprovalRequest::getModifiedDate).orElse(null));
             historyList.add(map);
         }

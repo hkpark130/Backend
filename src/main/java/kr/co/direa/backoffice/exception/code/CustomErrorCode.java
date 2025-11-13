@@ -18,6 +18,7 @@ public enum CustomErrorCode {
 
     APPROVAL_TYPE_UNSUPPORTED(HttpStatus.BAD_REQUEST, "APR-001", "지원하지 않는 결재 유형입니다."),
     DEVICE_NOT_FOUND(HttpStatus.NOT_FOUND, "DEV-001", "해당 장비를 찾을 수 없습니다."),
+    DEVICE_ID_REQUIRED(HttpStatus.BAD_REQUEST, "DEV-000", "장비를 선택해 주세요."),
     DEVICE_USER_NOT_IDENTIFIED(HttpStatus.UNAUTHORIZED, "DEV-002", "인증된 사용자 정보를 확인할 수 없습니다."),
     DEVICE_NOT_OWNED_BY_USER(HttpStatus.FORBIDDEN, "DEV-003", "요청한 사용자의 장비가 아닙니다."),
     DEVICE_RECOVERY_NOT_DISPOSED(HttpStatus.CONFLICT, "DEV-004", "폐기된 장비만 복구할 수 있습니다."),

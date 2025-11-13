@@ -99,20 +99,22 @@ public class DeviceDto implements Serializable {
             this.deadline = Optional.ofNullable(detail.getRequest()).map(ApprovalRequest::getDueDate).orElse(null);
             this.approvalId = Optional.ofNullable(detail.getRequest()).map(ApprovalRequest::getId).orElse(null);
 
+            String latestApplicant = Optional.ofNullable(detail.getRequest())
+                    .map(ApprovalRequest::getRequesterName)
+                    .filter(name -> name != null && !name.isBlank())
+                    .orElseGet(() -> Optional.ofNullable(detail.getRequestedRealUser())
+                            .filter(name -> name != null && !name.isBlank())
+                            .orElse(null));
+
+            if ((this.username == null || this.username.isBlank()) && latestApplicant != null) {
+                this.username = latestApplicant;
+            }
+
             boolean assignsUser = detail.getAction() == DeviceApprovalAction.RENTAL
                     && Optional.ofNullable(detail.getRequest())
                     .map(ApprovalRequest::getStatus)
                     .filter(status -> status == ApprovalStatus.APPROVED)
                     .isPresent();
-
-            if (assignsUser && (this.username == null || this.username.isBlank())) {
-                this.username = Optional.ofNullable(detail.getRequest())
-                        .map(ApprovalRequest::getRequesterName)
-                        .filter(name -> !name.isBlank())
-                        .orElseGet(() -> Optional.ofNullable(detail.getRequestedRealUser())
-                                .filter(name -> !name.isBlank())
-                                .orElse(null));
-            }
 
             if (!assignsUser) {
                 return;

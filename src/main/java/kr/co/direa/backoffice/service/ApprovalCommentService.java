@@ -99,8 +99,7 @@ public class ApprovalCommentService {
 		DeviceApprovalDetail detail = approval.getDetail() instanceof DeviceApprovalDetail deviceDetail
 			? deviceDetail
 			: null;
-		Devices device = detail != null ? detail.getDevice() : null;
-	String subject = "[장비 결재 댓글] " + buildApprovalSubject(approval, device);
+	String subject = "[장비 결재 댓글] " + buildApprovalSubject(approval, detail);
 
 		Set<String> receivers = new HashSet<>();
 		Optional.ofNullable(approval.getRequesterName())
@@ -206,10 +205,18 @@ public class ApprovalCommentService {
 		throw new CustomException(CustomErrorCode.COMMENT_FORBIDDEN);
 	}
 
-	private String buildApprovalSubject(ApprovalRequest approval, Devices device) {
-		String deviceId = device != null ? device.getId() : "";
-		if (!deviceId.isBlank()) {
-			return deviceId;
+	private String buildApprovalSubject(ApprovalRequest approval, DeviceApprovalDetail detail) {
+		if (detail != null) {
+			List<String> deviceIds = detail.resolveDevices().stream()
+				.map(Devices::getId)
+				.filter(id -> id != null && !id.isBlank())
+				.toList();
+			if (!deviceIds.isEmpty()) {
+				if (deviceIds.size() == 1) {
+					return deviceIds.get(0);
+				}
+				return deviceIds.get(0) + " 외 " + (deviceIds.size() - 1) + "대";
+			}
 		}
 		return Optional.ofNullable(approval.getTitle())
 			.filter(title -> !title.isBlank())

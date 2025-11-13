@@ -1,7 +1,6 @@
 package kr.co.direa.backoffice.repository.spec;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
@@ -10,20 +9,10 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
-import jakarta.persistence.criteria.CriteriaBuilder;
-import jakarta.persistence.criteria.CriteriaQuery;
-import jakarta.persistence.criteria.Expression;
-import jakarta.persistence.criteria.Join;
-import jakarta.persistence.criteria.JoinType;
-import jakarta.persistence.criteria.Predicate;
-import jakarta.persistence.criteria.Root;
-import jakarta.persistence.criteria.Subquery;
+import jakarta.persistence.criteria.*;
 
 import kr.co.direa.backoffice.constant.Constants;
-import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
-import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
-import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import org.springframework.data.jpa.domain.Specification;
 
 public final class DeviceSpecifications {
@@ -59,59 +48,13 @@ public final class DeviceSpecifications {
                                                     Root<Devices> root,
                                                     CriteriaQuery<?> query,
                                                     CriteriaBuilder cb) {
-        Predicate hasActiveDisposal = existsActiveDisposal(root, query, cb);
-        Predicate latestApprovedDisposal = existsLatestApprovedDisposal(root, query, cb);
         Predicate statusIsDisposed = cb.equal(root.get("status"), Constants.DISPOSE_TYPE);
 
         if (disposedOnly) {
-            Predicate disposedWithoutActive = cb.and(statusIsDisposed, cb.not(hasActiveDisposal));
-            Predicate nonDisposedButApproved = cb.and(cb.not(statusIsDisposed), latestApprovedDisposal);
-            return cb.or(disposedWithoutActive, nonDisposedButApproved);
+            return statusIsDisposed;
         }
 
-        Predicate notLatestApproved = cb.not(latestApprovedDisposal);
-        Predicate nonDisposed = cb.not(statusIsDisposed);
-        Predicate disposedWithActive = cb.and(statusIsDisposed, hasActiveDisposal);
-        return cb.and(notLatestApproved, cb.or(nonDisposed, disposedWithActive));
-    }
-
-    private static Predicate existsActiveDisposal(Root<Devices> root,
-                                                  CriteriaQuery<?> query,
-                                                  CriteriaBuilder cb) {
-        Subquery<Long> subquery = query.subquery(Long.class);
-        Root<DeviceApprovalDetail> detail = subquery.from(DeviceApprovalDetail.class);
-        subquery.select(cb.literal(1L));
-        subquery.where(
-                cb.equal(detail.get("device"), root),
-                cb.equal(detail.get("action"), DeviceApprovalAction.DISPOSAL),
-                detail.join("request").get("status").in(ApprovalStatus.PENDING, ApprovalStatus.IN_PROGRESS)
-        );
-        return cb.exists(subquery);
-    }
-
-    private static Predicate existsLatestApprovedDisposal(Root<Devices> root,
-                                                          CriteriaQuery<?> query,
-                                                          CriteriaBuilder cb) {
-        Subquery<LocalDateTime> latestCreatedSubquery = query.subquery(LocalDateTime.class);
-        Root<DeviceApprovalDetail> latestDetail = latestCreatedSubquery.from(DeviceApprovalDetail.class);
-        Join<DeviceApprovalDetail, ?> latestRequest = latestDetail.join("request");
-    latestCreatedSubquery.select(cb.greatest(latestRequest.<LocalDateTime>get("createdDate")));
-        latestCreatedSubquery.where(
-                cb.equal(latestDetail.get("device"), root),
-                cb.equal(latestDetail.get("action"), DeviceApprovalAction.DISPOSAL)
-        );
-
-        Subquery<Long> subquery = query.subquery(Long.class);
-        Root<DeviceApprovalDetail> detail = subquery.from(DeviceApprovalDetail.class);
-        Join<DeviceApprovalDetail, ?> request = detail.join("request");
-        subquery.select(cb.literal(1L));
-        subquery.where(
-                cb.equal(detail.get("device"), root),
-                cb.equal(detail.get("action"), DeviceApprovalAction.DISPOSAL),
-                cb.equal(request.get("status"), ApprovalStatus.APPROVED),
-                cb.equal(request.get("createdDate"), latestCreatedSubquery)
-        );
-        return cb.exists(subquery);
+        return cb.not(statusIsDisposed);
     }
 
     private static Predicate buildFilterPredicate(AdminDeviceSearchContext context,

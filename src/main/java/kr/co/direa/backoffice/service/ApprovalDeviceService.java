@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -27,12 +28,14 @@ import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.ApprovalStep;
 import kr.co.direa.backoffice.domain.Departments;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
+import kr.co.direa.backoffice.domain.DeviceApprovalItem;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Projects;
 import kr.co.direa.backoffice.domain.enums.ApprovalCategory;
 import kr.co.direa.backoffice.domain.enums.ApprovalStatus;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import kr.co.direa.backoffice.domain.enums.StepStatus;
+import kr.co.direa.backoffice.domain.enums.RealUserMode;
 import kr.co.direa.backoffice.dto.ApprovalDeviceDto;
 import kr.co.direa.backoffice.dto.DeviceApplicationRequestDto;
 import kr.co.direa.backoffice.dto.PageResponse;
@@ -51,6 +54,9 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class ApprovalDeviceService {
+    private static final String DEFAULT_METADATA_PROJECT_NAME = "본사";
+    private static final String DEFAULT_METADATA_DEPARTMENT_NAME = "경영지원부";
+
     private final ApprovalRequestRepository approvalRequestRepository;
     private final ApprovalStepRepository approvalStepRepository;
     private final DevicesRepository devicesRepository;
@@ -66,31 +72,80 @@ public class ApprovalDeviceService {
 
     @Transactional
     public ApprovalDeviceDto submitApplication(DeviceApplicationRequestDto request) {
-    DeviceApprovalAction action = Optional.ofNullable(DeviceApprovalAction.fromDisplayName(request.getType()))
-        .orElseThrow(() -> new CustomException(CustomErrorCode.APPROVAL_TYPE_UNSUPPORTED,
-            "Unsupported approval type: " + request.getType()));
+        DeviceApprovalAction action = Optional.ofNullable(DeviceApprovalAction.fromDisplayName(request.getType()))
+                .orElseThrow(() -> new CustomException(CustomErrorCode.APPROVAL_TYPE_UNSUPPORTED,
+                        "Unsupported approval type: " + request.getType()));
 
-        Devices device = devicesRepository.findById(request.getDeviceId())
-        .orElseThrow(() -> new CustomException(CustomErrorCode.DEVICE_NOT_FOUND,
-            "Device not found: " + request.getDeviceId()));
-        CommonLookupService.KeycloakUserInfo requesterInfo = resolveUserInfo(request.getUserName());
+        List<String> requestedDeviceIds = new ArrayList<>();
+        if (request.getDeviceIds() != null) {
+            request.getDeviceIds().stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(value -> !value.isEmpty())
+                    .forEach(requestedDeviceIds::add);
+        }
+        if (requestedDeviceIds.isEmpty() && request.getDeviceId() != null && !request.getDeviceId().isBlank()) {
+            requestedDeviceIds.add(request.getDeviceId().trim());
+        }
 
-        validateDuplicateDeviceAction(device, action);
+        LinkedHashSet<String> uniqueDeviceIds = new LinkedHashSet<>(requestedDeviceIds);
+        if (uniqueDeviceIds.isEmpty()) {
+            throw new CustomException(CustomErrorCode.DEVICE_ID_REQUIRED);
+        }
+
+        List<Devices> targetDevices = devicesRepository.findAllById(uniqueDeviceIds);
+        if (targetDevices.size() != uniqueDeviceIds.size()) {
+            Set<String> foundIds = targetDevices.stream()
+                    .map(Devices::getId)
+                    .collect(Collectors.toSet());
+            String missing = uniqueDeviceIds.stream()
+                    .filter(id -> !foundIds.contains(id))
+                    .findFirst()
+                    .orElse("unknown");
+            throw new CustomException(CustomErrorCode.DEVICE_NOT_FOUND,
+                    "Device not found: " + missing);
+        }
+
+    CommonLookupService.KeycloakUserInfo requesterInfo = resolveUserInfo(request.getUserName());
+    String currentUsername = commonLookupService.currentUsernameFromJwt().orElse(null);
+    String currentDisplayName = commonLookupService.currentUserDisplayNameFromJwt().orElse(null);
+    String applicantAutoRealUser = firstNonBlank(
+        currentDisplayName,
+        currentUsername,
+        requesterInfo != null ? requesterInfo.displayName() : null,
+        requesterInfo != null ? requesterInfo.username() : null,
+        request.getUserName());
+
+        validateDuplicateDeviceAction(targetDevices, action);
+
+        Map<String, DeviceApplicationRequestDto.DeviceSelection> perDeviceSelections =
+                toDeviceSelectionMap(request.getDevices());
+        List<String> defaultReturnTags = sanitizeTags(request.getTag());
 
         if (action == DeviceApprovalAction.RETURN) {
-            tagsService.replaceDeviceTags(device, request.getTag());
+            for (Devices device : targetDevices) {
+                if (device == null || device.getId() == null) {
+                    continue;
+                }
+                DeviceApplicationRequestDto.DeviceSelection selection = perDeviceSelections.get(device.getId());
+                List<String> resolvedTags = (selection == null)
+                        ? defaultReturnTags
+                        : sanitizeTags(selection.getTags());
+                tagsService.replaceDeviceTags(device, resolvedTags);
+            }
         }
+
         List<String> approverUsernames = prepareApproverSequence(request.getApprovers(), true);
         if (approverUsernames.isEmpty()) {
-        throw new CustomException(CustomErrorCode.APPROVAL_NO_AVAILABLE_APPROVER);
+            throw new CustomException(CustomErrorCode.APPROVAL_NO_AVAILABLE_APPROVER);
         }
 
         if ((request.getUsageStartDate() == null) != (request.getUsageEndDate() == null)) {
-        throw new CustomException(CustomErrorCode.APPROVAL_USAGE_PERIOD_INCOMPLETE);
+            throw new CustomException(CustomErrorCode.APPROVAL_USAGE_PERIOD_INCOMPLETE);
         }
         if (request.getUsageStartDate() != null && request.getUsageEndDate() != null
                 && request.getUsageEndDate().isBefore(request.getUsageStartDate())) {
-        throw new CustomException(CustomErrorCode.APPROVAL_USAGE_END_BEFORE_START);
+            throw new CustomException(CustomErrorCode.APPROVAL_USAGE_END_BEFORE_START);
         }
 
         String projectIdentifier = firstNonBlank(request.getProjectName(), request.getProjectCode());
@@ -107,26 +162,56 @@ public class ApprovalDeviceService {
             throw new CustomException(CustomErrorCode.REQUESTED_DEPARTMENT_NOT_FOUND);
         }
 
-        applyDeviceStateOnSubmission(device, request, action);
+    String defaultRealUser = applicantAutoRealUser;
+        Map<String, DeviceApprovalDetail.RequestedOverrides> requestedOverrides = buildRequestedOverrides(
+                uniqueDeviceIds,
+                request,
+                requestedProject,
+                requestedDepartment,
+        defaultRealUser,
+                perDeviceSelections);
 
+    applyDeviceStateOnSubmission(targetDevices, request, action, perDeviceSelections, requestedOverrides);
+
+        String primaryDeviceId = uniqueDeviceIds.isEmpty() ? null : uniqueDeviceIds.iterator().next();
         DeviceApprovalDetail detail = DeviceApprovalDetail.create();
-        detail.setDevice(device);
         detail.setAction(action);
         detail.setAttachmentUrl(request.getImg());
-        detail.setRequestedProject(requestedProject);
-        detail.setRequestedDepartment(requestedDepartment);
-        detail.setRequestedRealUser(request.getRealUser());
-        detail.setRequestedStatus(request.getDeviceStatus());
+        DeviceApplicationRequestDto.DeviceSelection primarySelection = primaryDeviceId != null
+                ? perDeviceSelections.get(primaryDeviceId)
+                : null;
+        String requestedStatus = firstNonBlank(
+                primarySelection != null ? primarySelection.getStatus() : null,
+                request.getDeviceStatus(),
+                request.getStatus());
+        detail.setRequestedStatus(requestedStatus);
         detail.setRequestedPurpose(request.getDevicePurpose());
         detail.setRequestedUsageStartDate(request.getUsageStartDate());
         detail.setRequestedUsageEndDate(request.getUsageEndDate());
         detail.setMemo(request.getDescription());
-        detail.updateFromDevice(device);
+        detail.replaceDevices(targetDevices, requestedOverrides);
+        if (primaryDeviceId != null) {
+            DeviceApprovalDetail.RequestedOverrides primaryOverride = requestedOverrides.get(primaryDeviceId);
+            if (primaryOverride != null) {
+                detail.setRequestedProject(primaryOverride.project());
+                detail.setRequestedDepartment(primaryOverride.department());
+                detail.setRequestedRealUser(primaryOverride.realUser());
+            } else {
+                detail.setRequestedProject(requestedProject);
+                detail.setRequestedDepartment(requestedDepartment);
+                detail.setRequestedRealUser(request.getRealUser());
+            }
+        } else {
+            detail.setRequestedProject(requestedProject);
+            detail.setRequestedDepartment(requestedDepartment);
+            detail.setRequestedRealUser(request.getRealUser());
+        }
+        targetDevices.stream().findFirst().ifPresent(detail::updateFromDevice);
 
         ApprovalRequest approval = ApprovalRequest.builder()
                 .category(ApprovalCategory.DEVICE)
                 .status(ApprovalStatus.PENDING)
-                .title(buildTitle(action, device))
+                .title(buildTitle(action, targetDevices))
                 .reason(request.getReason())
                 .dueDate(request.getDeadline())
                 .build();
@@ -361,20 +446,25 @@ public class ApprovalDeviceService {
                 ? deviceDetail
                 : null;
         if (detail != null) {
-            Devices device = detail.getDevice();
-            if (device != null) {
-                if (detail.getAction() == DeviceApprovalAction.RENTAL) {
-                    device.setIsUsable(Boolean.TRUE);
-                    UUID requesterId = approval.getRequesterExternalId();
-                    if (requesterId != null && requesterId.equals(device.getUserUuid())) {
-                        device.setUserUuid(null);
+            List<Devices> devices = detail.resolveDevices();
+            if (!devices.isEmpty()) {
+                for (Devices device : devices) {
+                    if (device == null) {
+                        continue;
                     }
-                    String requesterName = Optional.ofNullable(approval.getRequesterName()).map(String::trim).orElse(null);
-                    if (requesterName != null && requesterName.equals(device.getRealUser())) {
-                        device.setRealUser(null);
+                    if (detail.getAction() == DeviceApprovalAction.RENTAL) {
+                        device.setIsUsable(Boolean.TRUE);
+                        UUID requesterId = approval.getRequesterExternalId();
+                        if (requesterId != null && requesterId.equals(device.getUserUuid())) {
+                            device.setUserUuid(null);
+                        }
+                        String requesterName = Optional.ofNullable(approval.getRequesterName()).map(String::trim).orElse(null);
+                        if (requesterName != null && requesterName.equals(device.getRealUser())) {
+                            device.setRealUser(null);
+                        }
                     }
                 }
-                devicesRepository.save(device);
+                devicesRepository.saveAll(devices);
             }
         }
 
@@ -426,27 +516,103 @@ public class ApprovalDeviceService {
             detail.attachTo(approval);
         }
 
-        detail.setRequestedRealUser(Optional.ofNullable(updateRequest.getRealUser())
-                .map(String::trim)
-                .filter(value -> !value.isBlank())
-                .orElse(null));
+    RealUserMode requestRealUserMode = updateRequest.getRealUserMode() == null
+        ? null
+        : RealUserMode.fromKey(updateRequest.getRealUserMode());
 
-        String departmentName = Optional.ofNullable(updateRequest.getDepartmentName())
-                .map(String::trim)
-                .filter(value -> !value.isEmpty())
-                .orElse(null);
-        Departments requestedDepartment = lookupDepartment(departmentName);
-        if (departmentName != null && requestedDepartment == null) {
-            throw new CustomException(CustomErrorCode.REQUESTED_DEPARTMENT_NOT_FOUND);
-        }
-        detail.setRequestedDepartment(requestedDepartment);
+    String normalizedRealUser = null;
+    if (requestRealUserMode == RealUserMode.MANUAL) {
+        normalizedRealUser = Optional.ofNullable(updateRequest.getRealUser())
+            .map(String::trim)
+            .filter(value -> !value.isEmpty())
+            .orElse(null);
+    }
 
-        String projectIdentifier = firstNonBlank(updateRequest.getProjectName(), updateRequest.getProjectCode());
-        Projects requestedProject = lookupProject(projectIdentifier);
-        if (projectIdentifier != null && requestedProject == null) {
-            throw new CustomException(CustomErrorCode.PROJECT_NOT_FOUND);
-        }
+    String payloadUsername = Optional.ofNullable(updateRequest.getUsername())
+        .map(String::trim)
+        .filter(value -> !value.isEmpty())
+        .orElse(null);
+    String currentUsername = commonLookupService.currentUsernameFromJwt().orElse(null);
+    String currentDisplayName = commonLookupService.currentUserDisplayNameFromJwt().orElse(null);
+    String applicantAutoRealUser = firstNonBlank(
+        currentDisplayName,
+        currentUsername,
+        payloadUsername,
+        approval.getRequesterName());
+
+    String departmentName = Optional.ofNullable(updateRequest.getDepartmentName())
+        .map(String::trim)
+        .filter(value -> !value.isEmpty())
+        .orElse(null);
+    Departments requestedDepartment = lookupDepartment(departmentName);
+    if (departmentName != null && requestedDepartment == null) {
+        throw new CustomException(CustomErrorCode.REQUESTED_DEPARTMENT_NOT_FOUND);
+    }
+
+    String projectIdentifier = firstNonBlank(updateRequest.getProjectName(), updateRequest.getProjectCode());
+    Projects requestedProject = lookupProject(projectIdentifier);
+    if (projectIdentifier != null && requestedProject == null) {
+        throw new CustomException(CustomErrorCode.PROJECT_NOT_FOUND);
+    }
+
+    LinkedHashSet<String> deviceIds = detail.resolveDevices().stream()
+        .map(Devices::getId)
+        .filter(Objects::nonNull)
+        .map(String::trim)
+        .filter(value -> !value.isEmpty())
+        .collect(Collectors.toCollection(LinkedHashSet::new));
+
+    DeviceApplicationRequestDto overrideSource = new DeviceApplicationRequestDto();
+    overrideSource.setUserName(firstNonBlank(applicantAutoRealUser, approval.getRequesterName()));
+    overrideSource.setRealUser(normalizedRealUser);
+    overrideSource.setRealUserMode(requestRealUserMode != null ? requestRealUserMode.getKey() : null);
+    overrideSource.setProjectName(updateRequest.getProjectName());
+    overrideSource.setProjectCode(updateRequest.getProjectCode());
+    overrideSource.setDepartmentName(updateRequest.getDepartmentName());
+    overrideSource.setDevices(Optional.ofNullable(updateRequest.getDevices())
+        .map(ArrayList::new)
+        .orElseGet(ArrayList::new));
+
+    Map<String, DeviceApplicationRequestDto.DeviceSelection> overrideSelections =
+        toDeviceSelectionMap(overrideSource.getDevices());
+
+    Map<String, List<String>> requestedTagsByDevice = new LinkedHashMap<>();
+    overrideSelections.forEach((deviceId, selection) -> {
+        List<String> sanitized = sanitizeTags(selection != null ? selection.getTags() : null);
+        requestedTagsByDevice.put(deviceId, sanitized);
+    });
+    List<String> fallbackReturnTags = sanitizeTags(updateRequest.getTags());
+
+    String defaultRealUser;
+    if (requestRealUserMode == RealUserMode.MANUAL) {
+        defaultRealUser = firstNonBlank(
+            normalizedRealUser,
+            detail.getRequestedRealUser(),
+            approval.getRequesterName(),
+            applicantAutoRealUser);
+    } else {
+        defaultRealUser = firstNonBlank(
+            applicantAutoRealUser,
+            detail.getRequestedRealUser(),
+            approval.getRequesterName(),
+            normalizedRealUser);
+    }
+
+    Map<String, DeviceApprovalDetail.RequestedOverrides> requestedOverrides = buildRequestedOverrides(
+        deviceIds,
+        overrideSource,
+        requestedProject,
+        requestedDepartment,
+        defaultRealUser,
+        overrideSelections);
+
+    if (!requestedOverrides.isEmpty()) {
+        detail.applyRequestedOverrides(requestedOverrides);
+    } else {
         detail.setRequestedProject(requestedProject);
+        detail.setRequestedDepartment(requestedDepartment);
+        detail.setRequestedRealUser(normalizedRealUser);
+    }
 
         if (updateRequest.getUsageStartDate() != null && updateRequest.getUsageEndDate() != null
                 && updateRequest.getUsageEndDate().isBefore(updateRequest.getUsageStartDate())) {
@@ -455,12 +621,17 @@ public class ApprovalDeviceService {
         detail.setRequestedUsageStartDate(updateRequest.getUsageStartDate());
         detail.setRequestedUsageEndDate(updateRequest.getUsageEndDate());
 
-        if (detail.getAction() == DeviceApprovalAction.RETURN && updateRequest.getTags() != null) {
-            Devices taggedDevice = detail.getDevice();
-            if (taggedDevice != null) {
-                tagsService.replaceDeviceTags(taggedDevice, updateRequest.getTags());
-            }
-        }
+    if (detail.getAction() == DeviceApprovalAction.RETURN) {
+        detail.resolveDevices().stream()
+            .filter(device -> device != null && device.getId() != null)
+            .forEach(device -> {
+            String deviceId = device.getId();
+            List<String> specific = requestedTagsByDevice.containsKey(deviceId)
+                ? requestedTagsByDevice.get(deviceId)
+                : fallbackReturnTags;
+            tagsService.replaceDeviceTags(device, specific);
+            });
+    }
 
         ApprovalRequest saved = approvalRequestRepository.save(approval);
         saved.getSteps().stream()
@@ -792,27 +963,191 @@ public class ApprovalDeviceService {
         return new ArrayList<>(defaults);
     }
 
+    private void applyDeviceStateOnSubmission(List<Devices> devices,
+                                              DeviceApplicationRequestDto request,
+                                              DeviceApprovalAction action,
+                                              Map<String, DeviceApplicationRequestDto.DeviceSelection> selections,
+                                              Map<String, DeviceApprovalDetail.RequestedOverrides> overrides) {
+        if (devices == null || devices.isEmpty()) {
+            return;
+        }
+        for (Devices device : devices) {
+            DeviceApprovalDetail.RequestedOverrides override = null;
+            if (device != null && overrides != null) {
+                override = overrides.get(device.getId());
+            }
+            applyDeviceStateOnSubmission(device, request, action, selections, override);
+        }
+    }
+
     private void applyDeviceStateOnSubmission(Devices device,
                                               DeviceApplicationRequestDto request,
-                                              DeviceApprovalAction action) {
+                                              DeviceApprovalAction action,
+                                              Map<String, DeviceApplicationRequestDto.DeviceSelection> selections,
+                                              DeviceApprovalDetail.RequestedOverrides override) {
+        if (device == null) {
+            return;
+        }
         if (action != DeviceApprovalAction.RENTAL && request.getIsUsable() != null) {
             device.setIsUsable(request.getIsUsable());
         }
 
-        if (action != DeviceApprovalAction.DISPOSAL
-                && request.getStatus() != null
-                && !request.getStatus().isBlank()) {
-            device.setStatus(request.getStatus());
-        }
-
-        String requestedRealUser = Optional.ofNullable(request.getRealUser())
-                .map(String::trim)
-                .orElse(null);
-        if (requestedRealUser != null) {
-            device.setRealUser(requestedRealUser.isEmpty() ? null : requestedRealUser);
+        if (action != DeviceApprovalAction.DISPOSAL) {
+            DeviceApplicationRequestDto.DeviceSelection selection = selections != null
+                    ? selections.get(device.getId())
+                    : null;
+            String perDeviceStatus = selection != null ? firstNonBlank(selection.getStatus()) : null;
+            String resolvedStatus = firstNonBlank(perDeviceStatus, request.getStatus(), request.getDeviceStatus());
+            if (resolvedStatus != null && !resolvedStatus.isBlank()) {
+                device.setStatus(resolvedStatus.trim());
+            }
         }
 
         devicesRepository.save(device);
+    }
+
+    private Map<String, DeviceApprovalDetail.RequestedOverrides> buildRequestedOverrides(
+            LinkedHashSet<String> uniqueDeviceIds,
+            DeviceApplicationRequestDto request,
+            Projects defaultProject,
+            Departments defaultDepartment,
+            String defaultRealUser,
+            Map<String, DeviceApplicationRequestDto.DeviceSelection> perDeviceSelections) {
+        if (uniqueDeviceIds == null || uniqueDeviceIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+    Map<String, DeviceApplicationRequestDto.DeviceSelection> selections = perDeviceSelections != null
+        ? perDeviceSelections
+        : toDeviceSelectionMap(request.getDevices());
+    RealUserMode defaultMode = Optional.ofNullable(request.getRealUserMode())
+        .map(RealUserMode::fromKey)
+        .orElse(RealUserMode.AUTO);
+    String normalizedDefaultRealUser = firstNonBlank(defaultRealUser);
+    String requestLevelManualRealUser = defaultMode == RealUserMode.MANUAL
+        ? firstNonBlank(request.getRealUser())
+        : null;
+        Map<String, DeviceApprovalDetail.RequestedOverrides> result = new LinkedHashMap<>();
+        String defaultStatus = firstNonBlank(request.getStatus(), request.getDeviceStatus());
+
+        for (String deviceId : uniqueDeviceIds) {
+            DeviceApplicationRequestDto.DeviceSelection selection = selections.get(deviceId);
+
+            Projects resolvedProject = resolveRequestedProject(selection, defaultProject);
+            String requestedProjectName = firstNonBlank(
+                    selection != null ? selection.getProjectName() : null,
+                    Optional.ofNullable(resolvedProject).map(Projects::getName).orElse(null));
+            String requestedProjectCode = firstNonBlank(
+                    selection != null ? selection.getProjectCode() : null,
+                    Optional.ofNullable(resolvedProject).map(Projects::getCode).orElse(null));
+
+            Departments resolvedDepartment = resolveRequestedDepartment(selection, defaultDepartment);
+            String requestedDepartmentName = firstNonBlank(
+                    selection != null ? selection.getDepartmentName() : null,
+                    Optional.ofNullable(resolvedDepartment).map(Departments::getName).orElse(null));
+
+        RealUserMode mode = selection != null && selection.getRealUserMode() != null
+            ? RealUserMode.fromKey(selection.getRealUserMode())
+            : defaultMode;
+        String manualRealUser = selection != null ? firstNonBlank(selection.getRealUser()) : null;
+        if (manualRealUser == null && mode == RealUserMode.MANUAL) {
+            manualRealUser = requestLevelManualRealUser;
+        }
+            String resolvedRealUser = mode == RealUserMode.MANUAL
+                    ? firstNonBlank(manualRealUser, requestLevelManualRealUser)
+            : normalizedDefaultRealUser;
+
+            String selectionStatus = selection != null ? selection.getStatus() : null;
+            String resolvedStatus = firstNonBlank(selectionStatus, defaultStatus);
+
+            result.put(deviceId, new DeviceApprovalDetail.RequestedOverrides(
+                    resolvedProject,
+                    requestedProjectName,
+                    requestedProjectCode,
+                    resolvedDepartment,
+                    requestedDepartmentName,
+                    resolvedStatus,
+                    resolvedRealUser,
+                    mode));
+        }
+        return result;
+    }
+
+    private List<String> sanitizeTags(List<String> rawTags) {
+        if (rawTags == null || rawTags.isEmpty()) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String tag : rawTags) {
+            if (tag == null) {
+                continue;
+            }
+            String trimmed = tag.trim();
+            if (!trimmed.isEmpty()) {
+                unique.add(trimmed);
+            }
+        }
+        return new ArrayList<>(unique);
+    }
+
+    private Map<String, DeviceApplicationRequestDto.DeviceSelection> toDeviceSelectionMap(
+            List<DeviceApplicationRequestDto.DeviceSelection> selections) {
+        if (selections == null || selections.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, DeviceApplicationRequestDto.DeviceSelection> map = new LinkedHashMap<>();
+        for (DeviceApplicationRequestDto.DeviceSelection selection : selections) {
+            if (selection == null) {
+                continue;
+            }
+            String deviceId = firstNonBlank(selection.getDeviceId());
+            if (deviceId == null) {
+                continue;
+            }
+            map.putIfAbsent(deviceId, selection);
+        }
+        return map;
+    }
+
+    private Projects resolveRequestedProject(DeviceApplicationRequestDto.DeviceSelection selection,
+                                             Projects defaultProject) {
+        if (selection == null) {
+            return defaultProject;
+        }
+        String identifier = firstNonBlank(selection.getProjectName(), selection.getProjectCode());
+        if (identifier == null) {
+            return defaultProject;
+        }
+        Projects project = lookupProject(identifier);
+        if (project == null) {
+            throw new CustomException(CustomErrorCode.PROJECT_NOT_FOUND);
+        }
+        return project;
+    }
+
+    private Departments resolveRequestedDepartment(DeviceApplicationRequestDto.DeviceSelection selection,
+                                                   Departments defaultDepartment) {
+        if (selection == null) {
+            return defaultDepartment;
+        }
+        String name = firstNonBlank(selection.getDepartmentName());
+        if (name == null) {
+            return defaultDepartment;
+        }
+        Departments department = lookupDepartment(name);
+        if (department == null) {
+            throw new CustomException(CustomErrorCode.REQUESTED_DEPARTMENT_NOT_FOUND);
+        }
+        return department;
+    }
+
+    private void validateDuplicateDeviceAction(List<Devices> devices, DeviceApprovalAction requestedAction) {
+        if (devices == null || devices.isEmpty()) {
+            return;
+        }
+        for (Devices device : devices) {
+            validateDuplicateDeviceAction(device, requestedAction);
+        }
     }
 
     private void validateDuplicateDeviceAction(Devices device, DeviceApprovalAction requestedAction) {
@@ -823,9 +1158,9 @@ public class ApprovalDeviceService {
             return;
         }
 
-    List<DeviceApprovalDetail> activeDetails = deviceApprovalDetailRepository.findActiveByDeviceIdAndStatuses(
-        device.getId(),
-        List.of(ApprovalStatus.PENDING, ApprovalStatus.IN_PROGRESS));
+        List<DeviceApprovalDetail> activeDetails = deviceApprovalDetailRepository.findActiveByDeviceIdAndStatuses(
+                device.getId(),
+                List.of(ApprovalStatus.PENDING, ApprovalStatus.IN_PROGRESS));
 
         boolean hasBlocking = activeDetails.stream()
                 .map(DeviceApprovalDetail::getAction)
@@ -842,74 +1177,147 @@ public class ApprovalDeviceService {
             return;
         }
 
-        Devices device = detail.getDevice();
         DeviceApprovalAction action = detail.getAction();
-        if (device == null || action == null) {
+        if (action == null) {
             return;
         }
 
-        switch (action) {
-            case RENTAL -> applyRentalCompletion(device, approval, detail);
-            case RETURN -> applyReturnCompletion(device, detail);
-            default -> {
-                // fall through to apply requested attributes below
-            }
+        List<Devices> devices = detail.resolveDevices();
+        if (devices.isEmpty()) {
+            return;
         }
 
-        applyRequestedAttributes(device, detail);
-        devicesRepository.save(device);
+        boolean shouldResetMetadata = action == DeviceApprovalAction.RETURN
+                || action == DeviceApprovalAction.DISPOSAL;
+        Projects defaultProject = shouldResetMetadata ? resolveDefaultProjectMetadata() : null;
+        Departments defaultDepartment = shouldResetMetadata ? resolveDefaultDepartmentMetadata() : null;
+
+        for (Devices device : devices) {
+            if (device == null) {
+                continue;
+            }
+            DeviceApprovalItem detailItem = device.getId() != null ? detail.findItemByDeviceId(device.getId()) : null;
+            switch (action) {
+                case RENTAL -> applyRentalCompletion(device, approval, detail, detailItem);
+                case RETURN -> applyReturnCompletion(device);
+                case DISPOSAL -> applyDisposalCompletion(device);
+                default -> {
+                    // fall through
+                }
+            }
+            applyRequestedAttributes(device, detail, detailItem, shouldResetMetadata, defaultProject, defaultDepartment);
+        }
+        devicesRepository.saveAll(devices);
     }
 
     private void applyRentalCompletion(Devices device,
                                        ApprovalRequest approval,
-                                       DeviceApprovalDetail detail) {
+                                       DeviceApprovalDetail detail,
+                                       DeviceApprovalItem detailItem) {
         device.setIsUsable(Boolean.FALSE);
 
-    UUID resolvedUuid = Optional.ofNullable(approval.getRequesterExternalId()).orElse(null);
-    if (resolvedUuid == null) {
-        resolvedUuid = Optional.ofNullable(approval.getRequesterName())
-            .filter(name -> !name.isBlank())
-            .flatMap(commonLookupService::resolveKeycloakUserIdByUsername)
-            .map(this::safeUuid)
-            .orElse(null);
-    }
+        UUID resolvedUuid = Optional.ofNullable(approval.getRequesterExternalId()).orElse(null);
+        if (resolvedUuid == null) {
+            resolvedUuid = Optional.ofNullable(approval.getRequesterName())
+                    .filter(name -> !name.isBlank())
+                    .flatMap(commonLookupService::resolveKeycloakUserIdByUsername)
+                    .map(this::safeUuid)
+                    .orElse(null);
+        }
 
-    device.setUserUuid(resolvedUuid);
+        device.setUserUuid(resolvedUuid);
 
-    if ((detail.getRequestedRealUser() == null || detail.getRequestedRealUser().isBlank())) {
-        String requesterName = Optional.ofNullable(approval.getRequesterName())
-            .filter(name -> !name.isBlank())
-            .orElse(null);
-        if (requesterName != null) {
-        device.setRealUser(requesterName);
+        String requestedRealUser = resolveRequestedRealUser(detail, detailItem);
+        if (requestedRealUser == null || requestedRealUser.isBlank()) {
+            String requesterName = Optional.ofNullable(approval.getRequesterName())
+                    .map(String::trim)
+                    .filter(name -> !name.isEmpty())
+                    .orElse(null);
+            if (requesterName != null) {
+                device.setRealUser(requesterName);
+            }
         }
     }
+
+    private void applyReturnCompletion(Devices device) {
+        device.setIsUsable(Boolean.TRUE);
+        device.setUserUuid(null);
+        device.setRealUser(null);
     }
 
-    private void applyReturnCompletion(Devices device, DeviceApprovalDetail detail) {
-    device.setIsUsable(Boolean.TRUE);
-    device.setUserUuid(null);
-    device.setRealUser(null);
+    private void applyDisposalCompletion(Devices device) {
+        device.setUserUuid(null);
+        device.setRealUser(null);
     }
 
-    private void applyRequestedAttributes(Devices device, DeviceApprovalDetail detail) {
-        if (detail.getRequestedStatus() != null && !detail.getRequestedStatus().isBlank()) {
-            device.setStatus(detail.getRequestedStatus());
+    private void applyRequestedAttributes(Devices device,
+                                          DeviceApprovalDetail detail,
+                                          DeviceApprovalItem detailItem,
+                                          boolean resetToDefaultMetadata,
+                                          Projects defaultProject,
+                                          Departments defaultDepartment) {
+        String requestedStatus = Optional.ofNullable(detailItem)
+                .map(DeviceApprovalItem::getRequestedStatus)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElseGet(() -> Optional.ofNullable(detail.getRequestedStatus())
+                        .map(String::trim)
+                        .filter(value -> !value.isEmpty())
+                        .orElse(null));
+        if (requestedStatus != null) {
+            device.setStatus(requestedStatus);
         }
         if (detail.getRequestedPurpose() != null && !detail.getRequestedPurpose().isBlank()) {
             device.setPurpose(detail.getRequestedPurpose());
         }
-        if (detail.getRequestedProject() != null) {
-            device.setProjectId(detail.getRequestedProject());
+        if (resetToDefaultMetadata) {
+            if (defaultProject != null) {
+                device.setProjectId(defaultProject);
+            } else {
+                device.setProjectId(null);
+            }
+            if (defaultDepartment != null) {
+                device.setManageDep(defaultDepartment);
+            } else {
+                device.setManageDep(null);
+            }
+        } else {
+            Projects requestedProject = Optional.ofNullable(detailItem)
+                    .map(DeviceApprovalItem::getRequestedProject)
+                    .orElse(detail.getRequestedProject());
+            if (requestedProject != null) {
+                device.setProjectId(requestedProject);
+            }
+            Departments requestedDepartment = Optional.ofNullable(detailItem)
+                    .map(DeviceApprovalItem::getRequestedDepartment)
+                    .orElse(detail.getRequestedDepartment());
+            if (requestedDepartment != null) {
+                device.setManageDep(requestedDepartment);
+            }
         }
-        if (detail.getRequestedDepartment() != null) {
-            device.setManageDep(detail.getRequestedDepartment());
+        DeviceApprovalAction detailAction = detail != null ? detail.getAction() : null;
+        if (detailAction != DeviceApprovalAction.RETURN && detailAction != DeviceApprovalAction.DISPOSAL) {
+            String realUser = resolveRequestedRealUser(detail, detailItem);
+            if (realUser != null && !realUser.isBlank()) {
+                device.setRealUser(realUser);
+            }
         }
-        if (detail.getAction() != DeviceApprovalAction.RETURN
-                && detail.getRequestedRealUser() != null
-                && !detail.getRequestedRealUser().isBlank()) {
-            device.setRealUser(detail.getRequestedRealUser());
+    }
+
+    private String resolveRequestedRealUser(DeviceApprovalDetail detail, DeviceApprovalItem detailItem) {
+        String perDevice = Optional.ofNullable(detailItem)
+                .map(DeviceApprovalItem::getRequestedRealUser)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElse(null);
+        if (perDevice != null) {
+            return perDevice;
         }
+        return Optional.ofNullable(detail)
+                .map(DeviceApprovalDetail::getRequestedRealUser)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElse(null);
     }
 
     private void ensurePreviousStepsApproved(ApprovalRequest approval, int currentSequence) {
@@ -1012,12 +1420,17 @@ public class ApprovalDeviceService {
         DeviceApprovalDetail detail = approval.getDetail() instanceof DeviceApprovalDetail deviceDetail
                 ? deviceDetail
                 : null;
-        String deviceId = Optional.ofNullable(detail)
-                .map(DeviceApprovalDetail::getDevice)
-                .map(Devices::getId)
-                .orElse("");
-        if (!deviceId.isBlank()) {
-            return deviceId;
+        if (detail != null) {
+            List<String> deviceIds = detail.resolveDevices().stream()
+                    .map(Devices::getId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .toList();
+            if (!deviceIds.isEmpty()) {
+                if (deviceIds.size() == 1) {
+                    return deviceIds.get(0);
+                }
+                return deviceIds.get(0) + " 외 " + (deviceIds.size() - 1) + "대";
+            }
         }
         return Optional.ofNullable(approval.getTitle())
                 .filter(title -> !title.isBlank())
@@ -1037,12 +1450,26 @@ public class ApprovalDeviceService {
         return listPath + "/" + approvalId;
     }
 
-    private String buildTitle(DeviceApprovalAction action, Devices device) {
-        String deviceId = device != null ? device.getId() : null;
-        if (deviceId == null || deviceId.isBlank()) {
+    private String buildTitle(DeviceApprovalAction action, List<Devices> devices) {
+        if (action == null) {
+            return "";
+        }
+        if (devices == null || devices.isEmpty()) {
             return action.getDisplayName();
         }
-        return action.getDisplayName() + " - " + deviceId;
+
+        List<String> deviceIds = devices.stream()
+                .map(device -> device != null ? device.getId() : null)
+                .filter(id -> id != null && !id.isBlank())
+                .toList();
+
+        if (deviceIds.isEmpty()) {
+            return action.getDisplayName();
+        }
+        if (deviceIds.size() == 1) {
+            return action.getDisplayName() + " - " + deviceIds.get(0);
+        }
+        return action.getDisplayName() + " - " + deviceIds.get(0) + " 외 " + (deviceIds.size() - 1) + "대";
     }
 
     private Optional<ApprovalStep> resolveApprovalStep(Long approvalId,
@@ -1111,6 +1538,14 @@ public class ApprovalDeviceService {
             return null;
         }
         return departmentsRepository.findByName(departmentName).orElse(null);
+    }
+
+    private Projects resolveDefaultProjectMetadata() {
+        return lookupProject(DEFAULT_METADATA_PROJECT_NAME);
+    }
+
+    private Departments resolveDefaultDepartmentMetadata() {
+        return lookupDepartment(DEFAULT_METADATA_DEPARTMENT_NAME);
     }
 
     private CommonLookupService.KeycloakUserInfo resolveUserInfo(String username) {

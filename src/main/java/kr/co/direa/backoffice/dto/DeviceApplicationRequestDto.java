@@ -17,8 +17,10 @@ public class DeviceApplicationRequestDto {
     private Long approvalId;
     private String userName;
     private String realUser;
+    private String realUserMode;
     private String reason;
     private String deviceId;
+    private List<String> deviceIds = new ArrayList<>();
     private String deviceStatus;
     private String devicePurpose;
     private String description;
@@ -30,6 +32,7 @@ public class DeviceApplicationRequestDto {
     private String type;
     private String status;
     private Boolean isUsable;
+    private List<DeviceSelection> devices = new ArrayList<>();
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime deadline;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
@@ -38,4 +41,17 @@ public class DeviceApplicationRequestDto {
     private LocalDateTime usageEndDate;
     private List<String> tag = new ArrayList<>();
     private List<String> approvers = new ArrayList<>();
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class DeviceSelection {
+        private String deviceId;
+        private String departmentName;
+        private String projectName;
+        private String projectCode;
+        private String realUser;
+        private String realUserMode;
+        private String status;
+        private List<String> tags = new ArrayList<>();
+    }
 }
