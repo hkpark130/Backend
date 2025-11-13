@@ -25,7 +25,15 @@
             <table>
                 <tr><th>신청 번호</th><td>[[${approvalId}]]</td></tr>
                 <tr><th>신청 구분</th><td>[[${actionName}]]</td></tr>
-                <tr><th>신청 장비</th><td>[[${deviceId}]]</td></tr>
+                <tr>
+                    <th>신청 장비</th>
+                    <td>
+                        <span th:if="${deviceCount <= 1}">[[${deviceSummary}]]</span>
+                        <ul th:if="${deviceCount > 1}" style="margin: 0; padding-left: 18px;">
+                            <li th:each="deviceId : ${deviceIds}">[[${deviceId}]]</li>
+                        </ul>
+                    </td>
+                </tr>
                 <tr><th>신청자</th><td>[[${requesterName}]]</td></tr>
                 <tr><th>신청 사유</th><td>[[${reason}]]</td></tr>
                 <tr><th>사용 기간</th><td>[[${usagePeriod}]]</td></tr>
@@ -34,6 +42,38 @@
                 <tr><th>장비 상태</th><td>[[${requestedStatus}]]</td></tr>
                 <tr><th>등록 일시</th><td>[[${submittedAt}]]</td></tr>
                 <tr><th>결재 기한</th><td>[[${deadline}]]</td></tr>
+            </table>
+        </div>
+        <div class="section" th:if="${hasDeviceDetails}">
+            <h3>장비별 요청 내역</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>관리번호</th>
+                        <th>요청 프로젝트</th>
+                        <th>요청 부서</th>
+                        <th>요청 실사용자</th>
+                        <th>입력 방식</th>
+                        <th>현재 프로젝트</th>
+                        <th>현재 부서</th>
+                        <th>현재 실사용자</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="item : ${deviceDetails}">
+                        <td>[[${item.deviceId}]]</td>
+                        <td>
+                            <span>[[${item.requestedProject}]]</span>
+                            <span th:if="${item.requestedProjectCode}" style="color:#6b7280;">([[${item.requestedProjectCode}]])</span>
+                        </td>
+                        <td>[[${item.requestedDepartment}]]</td>
+                        <td>[[${item.requestedRealUser}]]</td>
+                        <td th:text="${item.requestedRealUserMode == 'manual' ? '직접 입력' : '자동'}">자동</td>
+                        <td>[[${item.currentProject}]]</td>
+                        <td>[[${item.currentDepartment}]]</td>
+                        <td>[[${item.currentRealUser}]]</td>
+                    </tr>
+                </tbody>
             </table>
         </div>
         <a class="cta" th:href="${link}" href="#" target="_blank" rel="noopener noreferrer">[[${linkLabel}]]</a>

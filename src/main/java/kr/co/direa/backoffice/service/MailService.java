@@ -4,6 +4,7 @@ import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -17,11 +18,13 @@ import kr.co.direa.backoffice.config.ApprovalProperties;
 import kr.co.direa.backoffice.domain.ApprovalComment;
 import kr.co.direa.backoffice.domain.ApprovalRequest;
 import kr.co.direa.backoffice.domain.ApprovalStep;
+import kr.co.direa.backoffice.domain.Categories;
 import kr.co.direa.backoffice.domain.DeviceApprovalDetail;
 import kr.co.direa.backoffice.domain.Devices;
 import kr.co.direa.backoffice.domain.Departments;
 import kr.co.direa.backoffice.domain.Projects;
 import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
+import kr.co.direa.backoffice.domain.enums.RealUserMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -181,11 +184,21 @@ public class MailService {
 		DeviceApprovalDetail detail = approval.getDetail() instanceof DeviceApprovalDetail deviceDetail ? deviceDetail : null;
 		if (detail != null) {
 			DeviceApprovalAction action = detail.getAction();
-			Devices device = detail.getDevice();
+			List<Devices> devices = detail.resolveDevices();
+			List<String> deviceIds = devices.stream()
+					.map(Devices::getId)
+					.filter(StringUtils::hasText)
+					.map(String::trim)
+					.distinct()
+					.toList();
 			Projects project = detail.getRequestedProject();
 			Departments department = detail.getRequestedDepartment();
 			variables.put("actionName", action != null ? defaultString(action.getDisplayName()) : "");
-			variables.put("deviceId", device != null ? defaultString(device.getId()) : "");
+			String primaryDeviceId = deviceIds.isEmpty() ? "" : deviceIds.get(0);
+			variables.put("deviceId", defaultString(primaryDeviceId));
+			variables.put("deviceSummary", deviceIds.isEmpty() ? "" : String.join(", ", deviceIds));
+			variables.put("deviceIds", deviceIds);
+			variables.put("deviceCount", deviceIds.size());
 			variables.put("requestedStatus", defaultString(detail.getRequestedStatus()));
 			variables.put("requestedPurpose", defaultString(detail.getRequestedPurpose()));
 			variables.put("requestedRealUser", defaultString(detail.getRequestedRealUser()));
@@ -194,9 +207,66 @@ public class MailService {
 			variables.put("requestedDepartment", department != null ? defaultString(department.getName()) : "");
 			variables.put("memo", defaultString(detail.getMemo()));
 			variables.put("usagePeriod", formatUsagePeriod(detail.getRequestedUsageStartDate(), detail.getRequestedUsageEndDate()));
+
+			Map<String, DeviceApprovalDetail.RequestedOverrides> overrideMap = detail.exportRequestedOverrides();
+			List<Map<String, Object>> deviceDetails = new ArrayList<>();
+			for (Devices device : devices) {
+				if (device == null) {
+					continue;
+				}
+				String rawDeviceId = device.getId();
+				DeviceApprovalDetail.RequestedOverrides override = rawDeviceId != null ? overrideMap.get(rawDeviceId) : null;
+
+				Projects overrideProject = override != null && override.project() != null ? override.project() : project;
+				Departments overrideDepartment = override != null && override.department() != null ? override.department() : department;
+
+				String requestedProjectName = firstNonBlank(
+						override != null ? override.projectName() : null,
+						overrideProject != null ? overrideProject.getName() : null);
+				String requestedProjectCode = firstNonBlank(
+						override != null ? override.projectCode() : null,
+						overrideProject != null ? overrideProject.getCode() : null);
+				String requestedDepartmentName = firstNonBlank(
+						override != null ? override.departmentName() : null,
+						overrideDepartment != null ? overrideDepartment.getName() : null);
+
+				RealUserMode overrideMode = override != null
+						? Optional.ofNullable(override.realUserMode()).orElse(RealUserMode.AUTO)
+						: RealUserMode.AUTO;
+				String requestedRealUser = firstNonBlank(
+						override != null ? override.realUser() : null,
+						detail.getRequestedRealUser());
+
+				Map<String, Object> entry = new HashMap<>();
+				entry.put("deviceId", defaultString(rawDeviceId));
+				entry.put("categoryName", defaultString(Optional.ofNullable(device.getCategoryId()).map(Categories::getName).orElse(null)));
+				entry.put("requestedProject", defaultString(requestedProjectName));
+				entry.put("requestedProjectCode", defaultString(requestedProjectCode));
+				entry.put("requestedDepartment", defaultString(requestedDepartmentName));
+				entry.put("requestedRealUser", defaultString(requestedRealUser));
+				entry.put("requestedRealUserMode", overrideMode.getKey());
+				entry.put("currentProject", defaultString(Optional.ofNullable(device.getProjectId()).map(Projects::getName).orElse(null)));
+				entry.put("currentDepartment", defaultString(Optional.ofNullable(device.getManageDep()).map(Departments::getName).orElse(null)));
+				entry.put("currentRealUser", defaultString(device.getRealUser()));
+				entry.put("currentStatus", defaultString(device.getStatus()));
+				deviceDetails.add(entry);
+			}
+			variables.put("deviceDetails", deviceDetails);
+			variables.put("hasDeviceDetails", !deviceDetails.isEmpty());
+
+			if (!deviceDetails.isEmpty()) {
+				Map<String, Object> first = deviceDetails.get(0);
+				variables.put("requestedProject", defaultString((String) first.get("requestedProject")));
+				variables.put("requestedProjectCode", defaultString((String) first.get("requestedProjectCode")));
+				variables.put("requestedDepartment", defaultString((String) first.get("requestedDepartment")));
+				variables.put("requestedRealUser", defaultString((String) first.get("requestedRealUser")));
+			}
 		} else {
 			variables.put("actionName", "");
 			variables.put("deviceId", "");
+			variables.put("deviceSummary", "");
+			variables.put("deviceIds", List.of());
+			variables.put("deviceCount", 0);
 			variables.put("requestedStatus", "");
 			variables.put("requestedPurpose", "");
 			variables.put("requestedRealUser", "");
@@ -205,6 +275,8 @@ public class MailService {
 			variables.put("requestedDepartment", "");
 			variables.put("usagePeriod", "");
 			variables.put("memo", "");
+			variables.put("deviceDetails", List.of());
+			variables.put("hasDeviceDetails", Boolean.FALSE);
 		}
 		return variables;
 	}
@@ -449,37 +521,3 @@ public class MailService {
 		return null;
 	}
 }
-/*
-package kr.co.direa.backoffice.service;
-
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.stereotype.Service;
-
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class MailService {
-	private final JavaMailSender mailSender;
-
-	public void sendMail(String to, String subject, String body) {
-		if (to == null || to.isBlank()) {
-			log.warn("Skip sending mail: empty recipient for subject {}", subject);
-			return;
-		}
-
-		try {
-			SimpleMailMessage message = new SimpleMailMessage();
-			message.setTo(to);
-			message.setSubject(subject);
-			message.setText(body);
-			mailSender.send(message);
-			log.debug("Mail sent to {} with subject {}", to, subject);
-		} catch (Exception ex) {
-			log.error("Failed to send mail to {} with subject {}", to, subject, ex);
-		}
-	}
-}
-*/
