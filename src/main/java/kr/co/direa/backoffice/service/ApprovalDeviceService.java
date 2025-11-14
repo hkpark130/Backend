@@ -54,6 +54,9 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class ApprovalDeviceService {
+    private static final String DEFAULT_METADATA_PROJECT_NAME = "본사";
+    private static final String DEFAULT_METADATA_DEPARTMENT_NAME = "경영지원부";
+
     private final ApprovalRequestRepository approvalRequestRepository;
     private final ApprovalStepRepository approvalStepRepository;
     private final DevicesRepository devicesRepository;
@@ -1151,6 +1154,11 @@ public class ApprovalDeviceService {
             return;
         }
 
+        boolean shouldResetMetadata = action == DeviceApprovalAction.RETURN
+                || action == DeviceApprovalAction.DISPOSAL;
+        Projects defaultProject = shouldResetMetadata ? resolveDefaultProjectMetadata() : null;
+        Departments defaultDepartment = shouldResetMetadata ? resolveDefaultDepartmentMetadata() : null;
+
         for (Devices device : devices) {
             if (device == null) {
                 continue;
@@ -1159,11 +1167,12 @@ public class ApprovalDeviceService {
             switch (action) {
                 case RENTAL -> applyRentalCompletion(device, approval, detail, detailItem);
                 case RETURN -> applyReturnCompletion(device);
+                case DISPOSAL -> applyDisposalCompletion(device);
                 default -> {
                     // fall through
                 }
             }
-            applyRequestedAttributes(device, detail, detailItem);
+            applyRequestedAttributes(device, detail, detailItem, shouldResetMetadata, defaultProject, defaultDepartment);
         }
         devicesRepository.saveAll(devices);
     }
@@ -1203,9 +1212,17 @@ public class ApprovalDeviceService {
         device.setRealUser(null);
     }
 
+    private void applyDisposalCompletion(Devices device) {
+        device.setUserUuid(null);
+        device.setRealUser(null);
+    }
+
     private void applyRequestedAttributes(Devices device,
                                           DeviceApprovalDetail detail,
-                                          DeviceApprovalItem detailItem) {
+                                          DeviceApprovalItem detailItem,
+                                          boolean resetToDefaultMetadata,
+                                          Projects defaultProject,
+                                          Departments defaultDepartment) {
         String requestedStatus = Optional.ofNullable(detailItem)
                 .map(DeviceApprovalItem::getRequestedStatus)
                 .map(String::trim)
@@ -1220,19 +1237,33 @@ public class ApprovalDeviceService {
         if (detail.getRequestedPurpose() != null && !detail.getRequestedPurpose().isBlank()) {
             device.setPurpose(detail.getRequestedPurpose());
         }
-        Projects requestedProject = Optional.ofNullable(detailItem)
-                .map(DeviceApprovalItem::getRequestedProject)
-                .orElse(detail.getRequestedProject());
-        if (requestedProject != null) {
-            device.setProjectId(requestedProject);
+        if (resetToDefaultMetadata) {
+            if (defaultProject != null) {
+                device.setProjectId(defaultProject);
+            } else {
+                device.setProjectId(null);
+            }
+            if (defaultDepartment != null) {
+                device.setManageDep(defaultDepartment);
+            } else {
+                device.setManageDep(null);
+            }
+        } else {
+            Projects requestedProject = Optional.ofNullable(detailItem)
+                    .map(DeviceApprovalItem::getRequestedProject)
+                    .orElse(detail.getRequestedProject());
+            if (requestedProject != null) {
+                device.setProjectId(requestedProject);
+            }
+            Departments requestedDepartment = Optional.ofNullable(detailItem)
+                    .map(DeviceApprovalItem::getRequestedDepartment)
+                    .orElse(detail.getRequestedDepartment());
+            if (requestedDepartment != null) {
+                device.setManageDep(requestedDepartment);
+            }
         }
-        Departments requestedDepartment = Optional.ofNullable(detailItem)
-                .map(DeviceApprovalItem::getRequestedDepartment)
-                .orElse(detail.getRequestedDepartment());
-        if (requestedDepartment != null) {
-            device.setManageDep(requestedDepartment);
-        }
-        if (detail.getAction() != DeviceApprovalAction.RETURN) {
+        DeviceApprovalAction detailAction = detail != null ? detail.getAction() : null;
+        if (detailAction != DeviceApprovalAction.RETURN && detailAction != DeviceApprovalAction.DISPOSAL) {
             String realUser = resolveRequestedRealUser(detail, detailItem);
             if (realUser != null && !realUser.isBlank()) {
                 device.setRealUser(realUser);
@@ -1474,6 +1505,14 @@ public class ApprovalDeviceService {
             return null;
         }
         return departmentsRepository.findByName(departmentName).orElse(null);
+    }
+
+    private Projects resolveDefaultProjectMetadata() {
+        return lookupProject(DEFAULT_METADATA_PROJECT_NAME);
+    }
+
+    private Departments resolveDefaultDepartmentMetadata() {
+        return lookupDepartment(DEFAULT_METADATA_DEPARTMENT_NAME);
     }
 
     private CommonLookupService.KeycloakUserInfo resolveUserInfo(String username) {
