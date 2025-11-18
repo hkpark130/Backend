@@ -17,7 +17,7 @@ public class ProjectService {
     private final ProjectsRepository projectsRepository;
 
     public List<ProjectDto> findAll() {
-        return projectsRepository.findAll()
+        return projectsRepository.findAllByOrderByCodeAsc()
                 .stream()
                 .map(ProjectDto::new)
                 .toList();

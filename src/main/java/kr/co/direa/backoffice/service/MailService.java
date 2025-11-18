@@ -1,7 +1,5 @@
 package kr.co.direa.backoffice.service;
 
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -9,7 +7,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +24,8 @@ import kr.co.direa.backoffice.domain.enums.DeviceApprovalAction;
 import kr.co.direa.backoffice.domain.enums.RealUserMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import org.thymeleaf.TemplateEngine;
-import org.thymeleaf.context.Context;
 
 @Slf4j
 @Service
@@ -40,13 +33,9 @@ import org.thymeleaf.context.Context;
 public class MailService {
 	private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-	private final JavaMailSender mailSender;
-	private final TemplateEngine templateEngine;
+	private final MailDeliveryService mailDeliveryService;
 	private final CommonLookupService commonLookupService;
 	private final ApprovalProperties approvalProperties;
-
-	@Value("${spring.mail.username:}")
-	private String mailUsername;
 
 	@Value("${constants.frontend:http://localhost}")
 	private String frontendBaseUrl;
@@ -490,34 +479,6 @@ public class MailService {
 		if (!StringUtils.hasText(to)) {
 			return;
 		}
-		try {
-			MimeMessage message = mailSender.createMimeMessage();
-			MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-			helper.setTo(to);
-			if (StringUtils.hasText(resolveFromAddress())) {
-				helper.setFrom(Objects.requireNonNull(resolveFromAddress()));
-			}
-			helper.setSubject(subject);
-			Context context = new Context(Locale.KOREAN);
-			context.setVariables(variables);
-			String html = templateEngine.process(templateName, context);
-			helper.setText(html, true);
-			mailSender.send(message);
-			log.debug("Mail sent to {} with subject {}", to, subject);
-		} catch (MessagingException ex) {
-			log.error("Failed to send mail to {} with subject {}", to, subject, ex);
-		}
-	}
-
-	@Nullable
-	private String resolveFromAddress() {
-		if (!StringUtils.hasText(mailUsername)) {
-			return null;
-		}
-		String trimmed = mailUsername.trim();
-		if (trimmed.contains("@")) {
-			return trimmed;
-		}
-		return null;
+		mailDeliveryService.send(to.trim(), subject, templateName, variables);
 	}
 }

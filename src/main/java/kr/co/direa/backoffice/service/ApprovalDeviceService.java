@@ -264,25 +264,32 @@ public class ApprovalDeviceService {
 
         int currentSequence = step.getSequence();
         ApprovalStep nextStep = findNextStep(approval, currentSequence);
+        String nextStepMessage = null;
         if (nextStep != null) {
             nextStep.begin();
             approval.setStatus(ApprovalStatus.IN_PROGRESS);
-            notifyApplicantOnProgress(approval, step);
             int nextSequence = nextStep.getSequence();
-            String message = (currentSequence > 0 ? currentSequence + "차 결재가 완료되어 " : "결재가 완료되어 ")
+            nextStepMessage = (currentSequence > 0 ? currentSequence + "차 결재가 완료되어 " : "결재가 완료되어 ")
                     + (nextSequence > 0 ? nextSequence + "차 결재가 필요합니다." : "다음 결재가 필요합니다.");
-            notifyApprover(approval, nextStep, message);
         } else {
             approval.markApproved();
             applyDeviceStateOnCompletion(approval);
-            notifyApplicantOnCompletion(approval);
         }
 
         if (comment != null && !comment.isBlank()) {
             approvalCommentService.addComment(approvalId, normalizedApproverUsername, comment);
         }
 
-        return new ApprovalDeviceDto(approvalRequestRepository.save(approval));
+        ApprovalRequest savedApproval = approvalRequestRepository.save(approval);
+
+        if (nextStep != null) {
+            notifyApplicantOnProgress(savedApproval, step);
+            notifyApprover(savedApproval, nextStep, nextStepMessage);
+        } else {
+            notifyApplicantOnCompletion(savedApproval);
+        }
+
+        return new ApprovalDeviceDto(savedApproval);
     }
 
     @Transactional

@@ -9,18 +9,22 @@ import kr.co.direa.backoffice.repository.ProjectsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 
-import java.util.Optional;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -35,6 +39,10 @@ public class CommonLookupService {
     private final CategoriesRepository categoriesRepository;
     private final DepartmentsRepository departmentsRepository;
     private final ProjectsRepository projectsRepository;
+    private final CacheManager cacheManager;
+
+    public static final String CACHE_KEYCLOAK_USER_INFO_BY_USERNAME = "keycloakUserInfoByUsername";
+    public static final String CACHE_KEYCLOAK_USER_INFO_BY_ID = "keycloakUserInfoById";
 
     @Value("${app.keycloak.url:}")
     private String keycloakUrl;
@@ -149,13 +157,26 @@ public class CommonLookupService {
                 .map(UUID::toString);
     }
 
+    @Cacheable(cacheNames = CACHE_KEYCLOAK_USER_INFO_BY_USERNAME,
+        key = "#root.target.normalizedUsernameKey(#username)",
+        condition = "#root.target.isCacheableUsername(#username)",
+        unless = "#root.target.shouldSkipCache(#result)")
     public Optional<KeycloakUserInfo> resolveKeycloakUserInfoByUsername(String username) {
+        if (!isCacheableUsername(username)) {
+            return Optional.empty();
+        }
+        Optional<KeycloakUserInfo> resolved = resolveKeycloakUserInfoByUsernameInternal(username);
+        resolved.ifPresent(this::hydrateIdCache);
+        return resolved;
+    }
+
+    private Optional<KeycloakUserInfo> resolveKeycloakUserInfoByUsernameInternal(String username) {
         if (username == null || username.isBlank()) {
             return Optional.empty();
         }
-    if (!isBlank(keycloakAdminUsername)
-        && username.equalsIgnoreCase(keycloakAdminUsername)
-        && !isBlank(keycloakAdminUserId)) {
+        if (!isBlank(keycloakAdminUsername)
+                && username.equalsIgnoreCase(keycloakAdminUsername)
+                && !isBlank(keycloakAdminUserId)) {
             return parseUuid(keycloakAdminUserId)
                     .map(adminId -> new KeycloakUserInfo(adminId, keycloakAdminUsername, null, keycloakAdminUsername));
         }
@@ -176,19 +197,20 @@ public class CommonLookupService {
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
             RestTemplate rt = new RestTemplate();
-            ResponseEntity<List<Map<String,Object>>> resp = rt.exchange(
+            ResponseEntity<List<Map<String, Object>>> resp = rt.exchange(
                     url,
                     HttpMethod.GET,
                     entity,
-                    new ParameterizedTypeReference<List<Map<String,Object>>>() {}
+                    new ParameterizedTypeReference<List<Map<String, Object>>>() {
+                    }
             );
             log.info("status={}, headers={}, body={}", resp.getStatusCode(), resp.getHeaders(), resp.getBody());
-            List<Map<String,Object>> body = resp.getBody();
+            List<Map<String, Object>> body = resp.getBody();
             if (!resp.getStatusCode().is2xxSuccessful() || body == null || body.isEmpty()) {
                 return Optional.empty();
             }
 
-            Map<String,Object> first = body.get(0);
+            Map<String, Object> first = body.get(0);
             UUID externalId = parseUuid(toStringOrNull(first.get("id"))).orElse(null);
             String resolvedUsername = toStringOrNull(first.get("username"));
             String email = toStringOrNull(first.get("email"));
@@ -213,7 +235,17 @@ public class CommonLookupService {
         return new KeycloakUserInfo(null, trimmed, null, trimmed);
     }
 
+    @Cacheable(cacheNames = CACHE_KEYCLOAK_USER_INFO_BY_ID,
+        key = "#userId",
+        condition = "#userId != null",
+        unless = "#root.target.shouldSkipCache(#result)")
     public Optional<KeycloakUserInfo> resolveKeycloakUserInfoById(UUID userId) {
+        Optional<KeycloakUserInfo> resolved = resolveKeycloakUserInfoByIdInternal(userId);
+        resolved.ifPresent(this::hydrateUsernameCache);
+        return resolved;
+    }
+
+    private Optional<KeycloakUserInfo> resolveKeycloakUserInfoByIdInternal(UUID userId) {
         if (userId == null) {
             return Optional.empty();
         }
@@ -233,13 +265,14 @@ public class CommonLookupService {
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
             RestTemplate rt = new RestTemplate();
-            ResponseEntity<Map<String,Object>> resp = rt.exchange(
+            ResponseEntity<Map<String, Object>> resp = rt.exchange(
                     url,
                     HttpMethod.GET,
                     entity,
-                    new ParameterizedTypeReference<Map<String,Object>>() {}
+                    new ParameterizedTypeReference<Map<String, Object>>() {
+                    }
             );
-            Map<String,Object> body = resp.getBody();
+            Map<String, Object> body = resp.getBody();
             if (!resp.getStatusCode().is2xxSuccessful() || body == null) {
                 return Optional.empty();
             }
@@ -428,6 +461,45 @@ public class CommonLookupService {
 
     private boolean isNotBlank(String value) {
         return value != null && !value.isBlank();
+    }
+
+    public boolean isCacheableUsername(String username) {
+        return username != null && !username.isBlank();
+    }
+
+    public String normalizedUsernameKey(String username) {
+        return username == null ? null : username.trim().toLowerCase(Locale.ROOT);
+    }
+
+    @SuppressWarnings("unused")
+    public boolean shouldSkipCache(Object result) {
+        if (result == null) {
+            return true;
+        }
+        if (result instanceof Optional<?> optional) {
+            return optional.isEmpty();
+        }
+        return false;
+    }
+
+    private void hydrateIdCache(KeycloakUserInfo userInfo) {
+        if (userInfo == null || userInfo.id() == null) {
+            return;
+        }
+        Cache cache = cacheManager.getCache(CACHE_KEYCLOAK_USER_INFO_BY_ID);
+        if (cache != null) {
+            cache.put(userInfo.id(), Optional.of(userInfo));
+        }
+    }
+
+    private void hydrateUsernameCache(KeycloakUserInfo userInfo) {
+        if (userInfo == null || userInfo.username() == null || userInfo.username().isBlank()) {
+            return;
+        }
+        Cache cache = cacheManager.getCache(CACHE_KEYCLOAK_USER_INFO_BY_USERNAME);
+        if (cache != null) {
+            cache.put(normalizedUsernameKey(userInfo.username()), Optional.of(userInfo));
+        }
     }
 
     public record KeycloakUserInfo(UUID id, String username, String email, String displayName) {}
